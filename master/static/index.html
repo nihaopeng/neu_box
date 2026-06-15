@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>neu_box — 终端沙盒</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<div class="layout">
+  <!-- 左侧：节点列表 + 申请表单 -->
+  <div class="panel panel-form" id="formPanel">
+    <div class="header">
+      <h1>neu_box</h1>
+      <p>申请终端沙盒</p>
+    </div>
+
+    <!-- 节点列表 -->
+    <div class="section-label">
+      节点 <span class="unit" id="nodeCount"></span>
+    </div>
+    <div class="node-list" id="nodeList">
+      <div class="node-card node-card-loading">
+        <span class="node-status-dot offline"></span>
+        <span style="color:var(--sub)">加载中…</span>
+      </div>
+    </div>
+
+    <form id="terminalForm">
+      <!-- CPU -->
+      <div class="field">
+        <label>CPU <span class="unit">核心数</span></label>
+        <div class="stepper" data-field="cpu">
+          <button type="button" data-action="down" aria-label="减少 CPU">−</button>
+          <span class="value">1</span>
+          <button type="button" data-action="up"   aria-label="增加 CPU">+</button>
+        </div>
+      </div>
+
+      <!-- 内存 -->
+      <div class="field">
+        <label>内存</label>
+        <div class="memory-row">
+          <div class="stepper" data-field="memory">
+            <button type="button" data-action="down" aria-label="减少内存">−</button>
+            <span class="value">1</span>
+            <button type="button" data-action="up"   aria-label="增加内存">+</button>
+          </div>
+          <div class="memory-unit" id="memUnit">
+            <button type="button" data-unit="MB">MB</button>
+            <button type="button" data-unit="GB" class="active">GB</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- GPU -->
+      <div class="field">
+        <label>GPU <span class="unit">卡数</span></label>
+        <div class="stepper" data-field="gpu">
+          <button type="button" data-action="down" aria-label="减少 GPU">−</button>
+          <span class="value">0</span>
+          <button type="button" data-action="up"   aria-label="增加 GPU">+</button>
+        </div>
+      </div>
+
+      <!-- NPU -->
+      <div class="field">
+        <label>NPU <span class="unit">卡数</span></label>
+        <div class="stepper" data-field="npu">
+          <button type="button" data-action="down" aria-label="减少 NPU">−</button>
+          <span class="value">0</span>
+          <button type="button" data-action="up"   aria-label="增加 NPU">+</button>
+        </div>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submitBtn" disabled>
+        申请终端
+      </button>
+    </form>
+
+    <div class="result" id="result"></div>
+  </div>
+
+  <!-- 右侧：终端 iframe -->
+  <div class="panel panel-terminal" id="terminalPanel">
+    <div class="terminal-header">
+      <span class="terminal-dot dot-red"></span>
+      <span class="terminal-dot dot-yellow"></span>
+      <span class="terminal-dot dot-green"></span>
+      <span class="terminal-url" id="terminalUrl"></span>
+      <button class="terminal-close" id="terminalClose" title="关闭终端">×</button>
+    </div>
+    <div class="terminal-placeholder" id="terminalPlaceholder">
+      <div class="placeholder-icon">⌨</div>
+      <p>选择一个节点并申请终端沙盒以开始</p>
+    </div>
+    <iframe class="terminal-iframe" id="terminalIframe" src="" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

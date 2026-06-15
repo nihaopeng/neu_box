@@ -1,0 +1,112 @@
+"""Worker 节点状态上报 — 查询本机 CPU/内存/GPU/NPU 资源及活跃沙盒。
+设备信息（GPU/NPU）由独立的 shell 脚本采集并输出 JSON，实现解耦。
+"""
+
+import json
+import os
+import subprocess
+
+import psutil
+from flask import Blueprint
+
+status_bp = Blueprint('status', __name__)
+
+# 脚本路径
+_SCRIPT_DIR = os.path.join(os.path.dirname(__file__), '..', 'scripts','info')
+
+
+class Node_Manager:
+    """Worker 本地节点状态管理器（单例），提供系统资源查询接口。"""
+
+    _instance = None
+
+    def __init__(self):
+        self._cached_total_cpu: int = psutil.cpu_count(logical=True) or 0
+
+    @classmethod
+    def get_instance(cls) -> 'Node_Manager':
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    # ── CPU ───────────────────────────────────────────────────
+
+    def cpu_info(self) -> tuple[int, float]:
+        """返回 (total_cores, idle_percent)。"""
+        psutil.cpu_percent(interval=0.05)            # 第一次预热
+        usage = psutil.cpu_percent(interval=0.05)
+        idle = max(0.0, 100.0 - usage)
+        return self._cached_total_cpu, idle
+
+    # ── 内存 ──────────────────────────────────────────────────
+
+    def mem_info(self) -> tuple[int, int]:
+        """返回 (total_bytes, available_bytes)。"""
+        mem = psutil.virtual_memory()
+        return mem.total, mem.available
+
+    # ── 设备信息（由独立脚本采集） ─────────────────────────────
+
+    def _run_device_script(self, name: str) -> dict:
+        """执行 scripts/<name>.sh，解析其 JSON 输出。失败返回全 0。"""
+        path = os.path.join(_SCRIPT_DIR, f'{name}.sh')
+        try:
+            out = subprocess.check_output(
+                [path],
+                timeout=10,
+                stderr=subprocess.DEVNULL,
+            )
+            return json.loads(out.decode())
+        except (FileNotFoundError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, json.JSONDecodeError):
+            return {'total': 0, 'idle': 0}
+
+    def gpu_info(self) -> dict:
+        return self._run_device_script('gpu_info')
+
+    def npu_info(self) -> dict:
+        return self._run_device_script('npu_info')
+
+    # ── 活跃沙盒 ──────────────────────────────────────────────
+
+    def active_sandbox_count(self) -> int:
+        """统计当前 ttyd 进程数作为活跃沙盒数。"""
+        count = 0
+        for proc in psutil.process_iter(['name']):
+            try:
+                if proc.info['name'] and 'ttyd' in proc.info['name']:
+                    count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return count
+
+    # ── 汇总 ──────────────────────────────────────────────────
+
+    def collect_status(self) -> dict:
+        """汇总本节点完整资源状态。"""
+        total_cpu, idle_cpu = self.cpu_info()
+        total_mem, idle_mem = self.mem_info()
+        gpu = self.gpu_info()
+        npu = self.npu_info()
+        sandboxes = self.active_sandbox_count()
+
+        return {
+            'status': 'online',
+            'total_cpu': total_cpu,
+            'idle_cpu': round(idle_cpu, 1),
+            'total_mem': total_mem,
+            'idle_mem': idle_mem,
+            'total_gpu': gpu['total'],
+            'idle_gpu': gpu['idle'],
+            'total_npu': npu['total'],
+            'idle_npu': npu['idle'],
+            'active_sandboxes': sandboxes,
+        }
+
+
+# ── 路由 ──────────────────────────────────────────────────────
+
+@status_bp.route('/status', methods=['GET'])
+def node_status():
+    """返回本节点当前资源状态，供 master 查询。"""
+    return Node_Manager.get_instance().collect_status(), 200
