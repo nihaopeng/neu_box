@@ -103,11 +103,11 @@ int device_reserve(struct bpf_cgroup_dev_ctx *ctx) {
         else
             return 0;   // 别人预留的 → 拒绝
     }
-    if (has_major && *has_major){
-        return 0;   // 该 major 被预留了，但不是我预留的 → 拒绝
-    }else{
-        return 1;
-    }
+    // if (has_major && *has_major){
+    //     return 0;   // 该 major 被预留了，但不是我预留的 → 拒绝
+    // }else{
+    //     return 1;
+    // }
 
     return 1;  // 未预留的 major,所有其他设备，一定要放行！！
 }
