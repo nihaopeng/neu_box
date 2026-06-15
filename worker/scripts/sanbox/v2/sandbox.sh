@@ -1,5 +1,5 @@
 #!/bin/bash
-# eBPF CGROUP_DEVICE 沙盒 — 设备黑名单 + CPU 限制 + 内存限制
+# eBPF CGROUP_DEVICE 沙盒 — 设备独占 + CPU 限制 + 内存限制
 # cgroup v2 only
 #
 # 依赖: clang, bpftool
@@ -22,8 +22,8 @@ BPF_SRC="${SCRIPT_DIR}/device_block.bpf.c"
 BPF_OBJ="${SCRIPT_DIR}/device_block.o"
 BPF_PIN="/sys/fs/bpf/device_block"
 MAP_DIR="/sys/fs/bpf/sandbox_maps"
-MAP_DEV_PIN="${MAP_DIR}/blocked_devices"
-MAP_MAJ_PIN="${MAP_DIR}/blocked_majors"
+MAP_RESERVED_PIN="${MAP_DIR}/reserved_devices"
+MAP_MAJORS_PIN="${MAP_DIR}/reserved_majors"
 
 CGROUP_ROOT="/sys/fs/cgroup"
 PREFIX="sandbox_"
@@ -101,21 +101,53 @@ parse_device() {
     fi
 }
 
+_cg_id() {
+    stat -c %i "$(_cg "$1")" 2>/dev/null
+}
+
+# little-endian hex 构建
+_u64_hex() {
+    local v="$1"
+    printf '%02x %02x %02x %02x %02x %02x %02x %02x' \
+        $(( v & 0xFF )) $(( (v >> 8) & 0xFF )) \
+        $(( (v >> 16) & 0xFF )) $(( (v >> 24) & 0xFF )) \
+        $(( (v >> 32) & 0xFF )) $(( (v >> 40) & 0xFF )) \
+        $(( (v >> 48) & 0xFF )) $(( (v >> 56) & 0xFF ))
+}
+
+_u32_hex() {
+    local v="$1"
+    printf '%02x %02x %02x %02x' \
+        $(( v & 0xFF )) $(( (v >> 8) & 0xFF )) \
+        $(( (v >> 16) & 0xFF )) $(( (v >> 24) & 0xFF ))
+}
+
 _ensure_bpf_ready() {
     echo "[auto] 编译 $BPF_SRC ..."
     clang -O2 -g -target bpf -c "$BPF_SRC" -o "$BPF_OBJ" || die "BPF 编译失败"
     echo "[auto] ✓ 编译完成"
-    # 程序未加载，或 maps 没 pin 好 → 重新加载
-    if ! bpftool prog show pinned "$BPF_PIN" &>/dev/null \
-        || [ ! -f "$MAP_DEV_PIN" ] \
-        || [ ! -f "$MAP_MAJ_PIN" ]; then
-        echo "[auto] 加载 BPF 程序 ..."
-        rm -rf "$BPF_PIN" "$MAP_DIR" 2>/dev/null || true
-        mkdir -p "$MAP_DIR"
-        bpftool prog load "$BPF_OBJ" "$BPF_PIN" pinmaps "$MAP_DIR"
-        echo "[auto] ✓ 已加载，maps:"
-        ls -l "$MAP_DIR/"
-    fi
+
+    # 每次重新加载前，先清理 root cgroup 上所有旧的 device_reserve 挂载
+    echo "[auto] 清理旧挂载 ..."
+    bpftool cgroup show "$CGROUP_ROOT" 2>/dev/null | \
+        awk '/device_reserve/{print $1}' | \
+        while read id; do
+            bpftool cgroup detach "$CGROUP_ROOT" cgroup_device id "$id" 2>/dev/null || true
+        done
+
+    # 每次从头加载 BPF 程序，保证状态干净
+    echo "[auto] 加载 BPF 程序 ..."
+    rm -rf "$BPF_PIN" "$MAP_DIR" 2>/dev/null || true
+    mkdir -p "$MAP_DIR"
+    bpftool prog load "$BPF_OBJ" "$BPF_PIN" pinmaps "$MAP_DIR"
+    echo "[auto] ✓ 已加载，maps:"
+    ls -l "$MAP_DIR/"
+
+    # 挂载 BPF 到 root cgroup（全局生效）
+    echo "[auto] 挂载 BPF 到 root cgroup ..."
+    bpftool cgroup attach "$CGROUP_ROOT" cgroup_device \
+        pinned "$BPF_PIN" multi || die "BPF 挂载到 root cgroup 失败"
+    echo "[auto] ✓ 已挂载"
 }
 
 # ==================================================================
@@ -134,6 +166,9 @@ cmd_load() {
     bpftool prog load "$BPF_OBJ" "$BPF_PIN" pinmaps "$MAP_DIR"
     echo "✓ BPF 程序已加载"
     ls -l "$MAP_DIR/"
+    bpftool cgroup attach "$CGROUP_ROOT" cgroup_device \
+        pinned "$BPF_PIN" multi || die "BPF 挂载失败"
+    echo "✓ 已挂载到 root cgroup"
 }
 
 cmd_create() {
@@ -147,40 +182,61 @@ cmd_create() {
 
     echo "cgroup 版本: v${CGROUP_VER}"
 
-    # 创建目录 + 设置资源
+    # 创建 cgroup + 设置资源
     _cg_enable
     _cg_mkdir "$name"
     _cg_set_cpu "$name" "$cpu"
     _cg_set_mem "$name" "$mem_bytes"
 
+    # 获取 cgroup ID（内核级唯一标识，与 bpf_get_current_cgroup_id 对应）
+    local cgid; cgid=$(_cg_id "$name")
+    [ -n "$cgid" ] || die "无法获取 cgroup ID"
+
     [ "$cpu" != "0" ] && echo "  CPU: ${cpu} 核"     || echo "  CPU: 不限"
     [ "$mem_bytes" != "0" ] && echo "  内存: ${mem}" || echo "  内存: 不限"
+    echo "  cgroup ID: $cgid"
 
-    # eBPF 设备控制
+    # eBPF 设备预留（挂在 root cgroup，全局生效）
     _ensure_bpf_ready
-    bpftool cgroup attach "$(_cg_dev "$name")" cgroup_device \
-        pinned "$BPF_PIN" multi 2>/dev/null \
-        || die "BPF 附着失败"
 
-    # 填充黑名单
+    local device_file="/tmp/neu_box_devices_${name}"
+    rm -f "$device_file"
+
     if [ $# -gt 0 ]; then
         for dev in "$@"; do
             local major minor; read -r major minor <<< "$(parse_device "$dev")"
+            local minor_num
             if [ "$minor" = "*" ]; then
-                bpftool map update pinned "$MAP_MAJ_PIN" \
-                    key "$major" 0 0 0 value 1 2>/dev/null || true
+                minor_num=4294967295  # 0xFFFFFFFF
             else
-                local key_hex
-                key_hex=$(printf '%02x %02x %02x %02x %02x %02x %02x %02x' \
-                    $(( major & 0xFF )) $(( (major >> 8) & 0xFF )) 0 0 \
-                    $(( minor & 0xFF )) $(( (minor >> 8) & 0xFF )) 0 0)
-                bpftool map update pinned "$MAP_DEV_PIN" \
-                    key hex $key_hex value 1 2>/dev/null || true
+                minor_num=$minor
+            fi
+            
+            # 使用标准的 _u32_hex 函数，自动处理好 4字节 Little-Endian
+            local key_hex val_hex
+            key_hex="$(_u32_hex "$major") $(_u32_hex "$minor_num")"
+            val_hex=$(_u64_hex "$cgid")
+            
+            bpftool map update pinned "$MAP_RESERVED_PIN" \
+                key hex $key_hex value hex $val_hex \
+                || die "设备预留失败: $dev"
+            echo "$dev" >> "$device_file"
+        done
+        echo "  独占设备: $*"
+        # 标记该 cgroup 在对应 major 有预留
+        # 去重: 只记录每个 major 一次
+        local seen_majors=""
+        for dev in "$@"; do
+            local mj mn; read -r mj mn <<< "$(parse_device "$dev")"
+            if [[ " $seen_majors " != *" $mj "* ]]; then
+                bpftool map update pinned "$MAP_MAJORS_PIN" \
+                    key hex $(_u64_hex "$cgid") $(_u32_hex "$mj") 00 00 00 00 value hex 01 \
+                    || die "标记 reserved_majors 失败 (major=$mj)"
+                seen_majors="$seen_majors $mj"
             fi
         done
-        echo "  设备黑名单: $*"
     else
-        echo "  设备: 全放行"
+        echo "  设备: 全共享（未预留任何设备）"
     fi
 
     echo "✓ 沙盒已创建"
@@ -219,19 +275,11 @@ cmd_status() {
     echo "  usage:  $(cat "$(_cg_memcur "$name")" 2>/dev/null || echo '-') bytes"
     echo ""
 
-    echo "--- eBPF 设备黑名单 ---"
-    echo "  [通配 major:*]"
-    bpftool map dump pinned "$MAP_MAJ_PIN" 2>/dev/null \
-        | grep -B1 '"value": 1' | grep '"key"' \
-        | sed 's/.*"key": //; s/,//' \
-        | while read major; do echo "    ${major}:*"; done
-    echo "  [精确 major:minor]"
-    bpftool map dump pinned "$MAP_DEV_PIN" 2>/dev/null \
-        | grep -B1 '"value": 1' | grep '"key"' \
-        | sed 's/.*"key": //' \
-        | while read entry; do
-            echo "    $(echo "$entry" | awk -F'[, ]+' '{print $1}'):$(echo "$entry" | awk -F'[, ]+' '{print $2}')"
-        done
+    echo "--- 设备预留 ---"
+    echo "  [reserved_devices]"
+    bpftool map dump pinned "$MAP_RESERVED_PIN" 2>/dev/null || echo "    (无)"
+    echo "  [reserving_cgroups]"
+    bpftool map dump pinned "$MAP_MAJORS_PIN" 2>/dev/null || echo "    (无)"
     echo ""
 
     echo "--- 进程列表 ---"
@@ -254,9 +302,39 @@ cmd_destroy() {
     [ -d "$(_cg "$name")" ] || die "沙盒 '${name}' 不存在"
 
     _cg_kickall "$name"
-    bpftool cgroup detach "$(_cg_dev "$name")" cgroup_device 2>/dev/null || true
-    _cg_rmdir "$name"
 
+    # 从 reserved_devices / reserved_majors 删除该沙盒预留的所有设备
+    local cgid; cgid=$(_cg_id "$name")
+    local device_file="/tmp/neu_box_devices_${name}"
+    if [ -f "$device_file" ] && [ -n "$cgid" ]; then
+        local seen_majors=""
+        while read dev; do
+            [ -z "$dev" ] && continue
+            local major minor; read -r major minor <<< "$(parse_device "$dev")"
+            local minor_num
+            if [ "$minor" = "*" ]; then
+                minor_num=4294967295
+            else
+                minor_num=$minor
+            fi
+            # 删除精确设备条目
+            local key_hex
+            key_hex=$(printf '%02x %02x %02x %02x %02x %02x %02x %02x' \
+                $(( major & 0xFF )) $(( (major >> 8) & 0xFF )) 0 0 \
+                $(( minor_num & 0xFF )) $(( (minor_num >> 8) & 0xFF )) 0 0)
+            bpftool map delete pinned "$MAP_RESERVED_PIN" \
+                key hex $key_hex 2>/dev/null || true
+            # 去重后删除 major 条目
+            if [[ " $seen_majors " != *" $major "* ]]; then
+                bpftool map delete pinned "$MAP_MAJORS_PIN" \
+                    key hex $(_u64_hex "$cgid") $(_u32_hex "$major") 00 00 00 00 2>/dev/null || true
+                seen_majors="$seen_majors $major"
+            fi
+        done < "$device_file"
+        rm -f "$device_file"
+    fi
+
+    _cg_rmdir "$name"
     echo "✓ 沙盒 '${name}' 已销毁"
 }
 
@@ -270,6 +348,7 @@ cmd_cleanup() {
         cmd_destroy "$name" 2>/dev/null || true
     done
     rm -rf "$BPF_PIN" "$MAP_DIR" 2>/dev/null || true
+    rm -f /tmp/neu_box_devices_* 2>/dev/null || true
     echo "✓ 清理完成"
 }
 
