@@ -122,22 +122,34 @@ _u32_hex() {
         $(( (v >> 16) & 0xFF )) $(( (v >> 24) & 0xFF ))
 }
 
-_ensure_bpf_ready() {
-    echo "[auto] 编译 $BPF_SRC ..."
-    clang -O2 -g -target bpf -c "$BPF_SRC" -o "$BPF_OBJ" || die "BPF 编译失败"
-    echo "[auto] ✓ 编译完成"
-
-    # 每次重新加载前，先清理 root cgroup 上所有旧的 device_reserve 挂载
-    echo "[auto] 清理旧挂载 ..."
+# 从 root cgroup 分离所有 device_reserve BPF 程序
+_bpf_detach() {
+    echo "[bpf] 分离 root cgroup 上的 BPF 程序 ..."
     bpftool cgroup show "$CGROUP_ROOT" 2>/dev/null | \
         awk '/device_reserve/{print $1}' | \
         while read id; do
             bpftool cgroup detach "$CGROUP_ROOT" cgroup_device id "$id" 2>/dev/null || true
         done
+    echo "[bpf] ✓ 已分离"
+}
 
-    # 每次从头加载 BPF 程序，保证状态干净
-    echo "[auto] 加载 BPF 程序 ..."
+_bpf_unload() {
+    echo "[bpf] 卸载 BPF 程序及 maps ..."
     rm -rf "$BPF_PIN" "$MAP_DIR" 2>/dev/null || true
+    echo "[bpf] ✓ 已卸载"
+}
+
+_ensure_bpf_ready() {
+    echo "[auto] 编译 $BPF_SRC ..."
+    clang -O2 -g -target bpf -c "$BPF_SRC" -o "$BPF_OBJ" || die "BPF 编译失败"
+    echo "[auto] ✓ 编译完成"
+
+    # 每次重新加载前，先清理旧的挂载和 pin
+    _bpf_detach
+    _bpf_unload
+
+    # 从头加载 BPF 程序，保证状态干净
+    echo "[auto] 加载 BPF 程序 ..."
     mkdir -p "$MAP_DIR"
     bpftool prog load "$BPF_OBJ" "$BPF_PIN" pinmaps "$MAP_DIR"
     echo "[auto] ✓ 已加载，maps:"
@@ -335,6 +347,11 @@ cmd_destroy() {
     fi
 
     _cg_rmdir "$name"
+
+    # 分离并卸载 BPF 程序
+    _bpf_detach
+    _bpf_unload
+
     echo "✓ 沙盒 '${name}' 已销毁"
 }
 
@@ -345,9 +362,17 @@ cmd_cleanup() {
         local name="${d##*/${PREFIX}}"
         name="${name%/}"
         echo "销毁沙盒: $name"
-        cmd_destroy "$name" 2>/dev/null || true
+        # 直接清理 cgroup 和 map 条目，不走 cmd_destroy 避免重复 detach
+        _cg_kickall "$name" 2>/dev/null || true
+        _cg_rmdir "$name" 2>/dev/null || true
     done
-    rm -rf "$BPF_PIN" "$MAP_DIR" 2>/dev/null || true
+
+    # 分离 BPF 程序
+    _bpf_detach
+
+    # 卸载 BPF 程序及 maps
+    _bpf_unload
+
     rm -f /tmp/neu_box_devices_* 2>/dev/null || true
     echo "✓ 清理完成"
 }

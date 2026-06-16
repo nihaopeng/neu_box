@@ -1,47 +1,57 @@
-// 设备独占控制 - eBPF CGROUP_DEVICE
+// 设备独占控制 - eBPF CGROUP_DEVICE (libbpf)
 // 支持 major:minor 精确匹配 和 major:* 通配
-// 完全自包含，不依赖任何系统头文件
 //
 // 编译: clang -O2 -g -target bpf -c device_block.bpf.c -o device_block.o
+//
+// 可选 CO-RE: 先 bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+//            然后取消下面两行的注释，并删除本文件中所有手动定义的类型
 
-// ── 基础类型 ──────────────────────────────────────────────────
+// #include "vmlinux.h"
+
+// ── 基础类型 (bpf_helpers.h 依赖这些类型，必须在 include 之前定义) ──
+
+#ifndef __LINUX_TYPES_DEFINED__
+#define __LINUX_TYPES_DEFINED__
 typedef unsigned char      __u8;
 typedef unsigned short     __u16;
 typedef unsigned int       __u32;
 typedef unsigned long long __u64;
+typedef signed char        __s8;
+typedef signed short       __s16;
+typedef signed int         __s32;
+typedef signed long long   __s64;
 
-// ── BPF 杂项 ──────────────────────────────────────────────────
-#define SEC(name)  __attribute__((section(name), used))
+// 网络字节序类型 (内核中用 __bitwise 标记，BPF 编译时等价于基础类型)
+typedef __u16 __be16;
+typedef __u32 __be32;
+typedef __u32 __wsum;
+#endif
 
-// BPF helper 函数 ID
-static void *(*bpf_map_lookup_elem)(void *map, const void *key) =
-    (void *) 1;
-static long (*bpf_map_update_elem)(void *map, const void *key,
-                                   const void *value, __u64 flags) =
-    (void *) 2;
-static __u64 (*bpf_get_current_cgroup_id)(void) =
-    (void *) 80;
-
-// 地图定义辅助宏
-#define __uint(name, val)  int (*name)[val]
-#define __type(name, val)  typeof(val) *name
-
-// 地图类型 (来自 include/uapi/linux/bpf.h)
+// BPF map 类型枚举 (来自 include/uapi/linux/bpf.h，bpf_helpers.h 不提供)
+#ifndef BPF_MAP_TYPE_HASH
 #define BPF_MAP_TYPE_HASH 1
+#endif
 
-// ── cgroup device ctx 与常量 ──────────────────────────────────
+#include <bpf/bpf_helpers.h>
 
+// ── 内核类型定义 (使用 vmlinux.h 时不需要，可删除以下全部) ──────────
+
+#ifndef __bpf_cgroup_dev_ctx_defined
+#define __bpf_cgroup_dev_ctx_defined
 // struct bpf_cgroup_dev_ctx (来自 include/uapi/linux/bpf.h)
 struct bpf_cgroup_dev_ctx {
     __u32 access_type;
     __u32 major;
     __u32 minor;
 };
+#endif
 
+#ifndef BPF_DEVCG_DEV_BLOCK
 #define BPF_DEVCG_DEV_BLOCK 1
 #define BPF_DEVCG_DEV_CHAR  2
+#endif
 
-// ── 设备号 key ─────────────────────────────────────────────────
+// ── 设备号 key ─────────────────────────────────────────────────────
 
 struct dev_key {
     __u32 major;
@@ -52,6 +62,8 @@ struct dev_key {
 #define MINOR_WILDCARD  ((__u32)-1)
 
 char LICENSE[] SEC("license") = "GPL";
+
+// ── BPF maps ───────────────────────────────────────────────────────
 
 // 设备预留表: key=(major,minor) → value=cgroup_id
 // minor=MINOR_WILDCARD 表示该 major 下所有 minor 都被预留
@@ -67,6 +79,7 @@ struct {
 struct cg_major_key {
     __u64 cgid;
     __u32 major;
+    __u32 __pad;  // 显式 padding，确保 16 字节对齐，避免 map key 哈希不一致
 };
 
 struct {
@@ -76,38 +89,47 @@ struct {
     __type(value, __u8);
 } reserved_majors SEC(".maps");
 
-// ── BPF 程序入口 ───────────────────────────────────────────────
+// ── BPF 程序入口 ───────────────────────────────────────────────────
 
 SEC("cgroup/dev")
 int device_reserve(struct bpf_cgroup_dev_ctx *ctx) {
-    // 只拦截字符设备，块设备直接放行
     __u16 dev_type = ctx->access_type & 0xFFFF;
+
+    // 只拦截字符设备，块设备直接放行
     if (dev_type != BPF_DEVCG_DEV_CHAR)
         return 1;  // 1 = 允许
 
-    // nvidiactl (minor=255) 始终放行
-    if (ctx->minor == 255)
+    // bpf_printk("device_reserve: char dev major=%u minor=%u", ctx->major, ctx->minor);
+
+    // 过滤掉一些特殊设备，避免误伤
+    if ((ctx->major == 195 && ctx->minor == 255) || (ctx->major != 235 && ctx->major != 195)) {
+        // bpf_printk("device_reserve: SKIP (special/other major) major=%u minor=%u", ctx->major, ctx->minor);
         return 1;
+    }
 
     __u64 my_cgid = bpf_get_current_cgroup_id();
 
     // 1) 精确匹配 major:minor
     struct dev_key exact_key = { .major = ctx->major, .minor = ctx->minor };
-    struct cg_major_key mk = { .cgid = my_cgid, .major = ctx->major };
+    struct cg_major_key mk = { .cgid = my_cgid, .major = ctx->major, .__pad = 0 };
     __u64 *owner = bpf_map_lookup_elem(&reserved_devices, &exact_key);
     __u8 *has_major = bpf_map_lookup_elem(&reserved_majors, &mk);
 
     if (owner) {
-        if (*owner == my_cgid)
+        if (*owner == my_cgid) {
+            // bpf_printk("device_reserve: ALLOW (my device) major=%u minor=%u cgid=%llu",ctx->major, ctx->minor, my_cgid);
             return 1;   // 我预留的 → 放行
-        else
+        } else {
+            // bpf_printk("device_reserve: DENY (other's device) major=%u minor=%u",ctx->major, ctx->minor);
+            // bpf_printk("device_reserve: DENY my_cgid=%llu owner_cgid=%llu",my_cgid, *owner);
             return 0;   // 别人预留的 → 拒绝
+        }
     }
-    if (has_major && *has_major){
+    if (has_major && *has_major) {
+        // bpf_printk("device_reserve: DENY (major reserved by other) major=%u cgid=%llu",ctx->major, my_cgid);
         return 0;   // 该 major 被预留了，但不是我预留的 → 拒绝
-    }else{
-        return 1;
     }
 
-    return 1;  // 未预留的 major,所有其他设备，一定要放行！！
+    // bpf_printk("device_reserve: ALLOW (unreserved) major=%u minor=%u cgid=%llu",ctx->major, ctx->minor, my_cgid);
+    return 1;  // 未预留的 major，所有其他设备，一定要放行！！
 }
