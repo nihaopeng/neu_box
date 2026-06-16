@@ -1,4 +1,5 @@
 import os
+import platform
 import pwd
 import subprocess
 import time
@@ -8,6 +9,29 @@ from executor.port_pool import Port_Pool_Manager
 from executor.sbx_manager import SbxManager
 
 terminal_bp = Blueprint('terminal', __name__)
+
+
+def _resolve_ttyd_binary():
+    """根据系统架构自动选择 worker/deps/ 下对应的 ttyd 二进制。"""
+    deps_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..', 'deps'))
+    machine = platform.machine()
+    arch_map = {
+        'aarch64': 'ttyd.aarch64',
+        'x86_64':  'ttyd.x86_64',
+    }
+    filename = arch_map.get(machine)
+    if filename:
+        path = os.path.join(deps_dir, filename)
+        if os.path.isfile(path):
+            print(f'[TTYD] 使用内嵌二进制: {path}')
+            return path
+    # 架构未知或文件缺失，回退到系统 PATH
+    print(f'[TTYD] 未找到匹配的架构 ({machine})，回退到系统 ttyd')
+    return 'ttyd'
+
+
+TTYD_BIN = _resolve_ttyd_binary()
 
 
 @terminal_bp.route('/create', methods=['POST'])
@@ -36,7 +60,7 @@ def create():
 
     try:
         # 2. 构建 ttyd 命令
-        ttyd_cmd = ['ttyd', '-p', str(port), '-W', '-q']
+        ttyd_cmd = [TTYD_BIN, '-p', str(port), '-W', '-q']
 
         # 如果提供了用户名和密码，启用 HTTP 基本认证
         if username and password:
