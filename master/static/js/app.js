@@ -4,15 +4,13 @@ const state = {
   cpu:     1,
   memory:  1,
   memUnit: 'GB',
-  gpu:     0,
-  npu:     0,
+  device_num: 0,
 };
 
 const limits = {
   cpu:    { min: 1,   max: 64   },
   memory: { min: 1,   max: 256  },
-  gpu:    { min: 0,   max: 8    },
-  npu:    { min: 0,   max: 8    },
+  device_num: { min: 0, max: 16 },
 };
 
 // ── DOM refs ──────────────────────────────────────────────────
@@ -306,8 +304,7 @@ form.addEventListener('submit', async (e) => {
     cpu:      state.cpu,
     memory:   state.memory,
     mem_unit: state.memUnit,
-    gpu:      state.gpu,
-    npu:      state.npu,
+    device_num: state.device_num,
   };
 
   try {

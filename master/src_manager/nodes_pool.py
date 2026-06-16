@@ -245,5 +245,5 @@ class Nodes_Pool:
             json=req,
             timeout=30,
         )
-        resp.raise_for_status()
+        print(f'[Nodes_Pool] 请求节点 {node_id} 创建终端，响应状态 {resp.status_code}, 内容 {resp.text}')
         return resp

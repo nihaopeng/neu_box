@@ -14,8 +14,7 @@ def create():
     cpu = data.get('cpu', 1)
     memory = data.get('memory', 1)
     mem_unit = data.get('mem_unit', 'GB')
-    gpu = data.get('gpu', 0)
-    npu = data.get('npu', 0)
+    device_num = data.get('device_num', 0)
 
     # 参数校验
     errors = []
@@ -25,20 +24,17 @@ def create():
         errors.append('内存至少为 1')
     if mem_unit not in ('MB', 'GB'):
         errors.append('内存单位只能是 MB 或 GB')
-    if not isinstance(gpu, int) or gpu < 0:
-        errors.append('GPU 不能为负数')
-    if not isinstance(npu, int) or npu < 0:
-        errors.append('NPU 不能为负数')
+    if not isinstance(device_num, int) or device_num < 0:
+        errors.append('设备数不能为负数')
 
     if errors:
         return {'error': '; '.join(errors)}, 400
 
-    req ={
+    req = {
         'cpu': cpu,
         'memory': memory,
         'mem_unit': mem_unit,
-        'gpu': gpu,
-        'npu': npu
+        'device_num': device_num,
     }
 
     response = Nodes_Pool.get_nodes_pool().req_node(node_id, req)
