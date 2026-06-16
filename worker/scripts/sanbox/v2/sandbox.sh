@@ -139,27 +139,46 @@ _bpf_unload() {
     echo "[bpf] ✓ 已卸载"
 }
 
+_bpf_is_loaded() {
+    [ -f "$BPF_PIN" ] && [ -f "$MAP_RESERVED_PIN" ] && [ -f "$MAP_MAJORS_PIN" ]
+}
+
+_bpf_is_attached() {
+    bpftool cgroup show "$CGROUP_ROOT" 2>/dev/null | grep -q "device_reserve"
+}
+
+# 确保 BPF 程序已加载并挂载到 root cgroup（仅首次执行，后续 create 跳过）
 _ensure_bpf_ready() {
-    echo "[auto] 编译 $BPF_SRC ..."
+    # 已加载且已挂载 → 直接返回
+    if _bpf_is_loaded && _bpf_is_attached; then
+        echo "[bpf] BPF 程序已就绪，跳过加载"
+        return
+    fi
+
+    # 已加载但未挂载 → 仅重新挂载
+    if _bpf_is_loaded && ! _bpf_is_attached; then
+        echo "[bpf] BPF 程序已加载但未挂载，重新挂载..."
+        bpftool cgroup attach "$CGROUP_ROOT" cgroup_device \
+            pinned "$BPF_PIN" multi || die "BPF 挂载到 root cgroup 失败"
+        echo "[bpf] ✓ 已挂载"
+        return
+    fi
+
+    # 首次加载：编译 + 加载 + 挂载
+    echo "[bpf] 首次加载，编译 $BPF_SRC ..."
     clang -O2 -g -target bpf -c "$BPF_SRC" -o "$BPF_OBJ" || die "BPF 编译失败"
-    echo "[auto] ✓ 编译完成"
+    echo "[bpf] ✓ 编译完成"
 
-    # 每次重新加载前，先清理旧的挂载和 pin
-    _bpf_detach
-    _bpf_unload
-
-    # 从头加载 BPF 程序，保证状态干净
-    echo "[auto] 加载 BPF 程序 ..."
+    echo "[bpf] 加载 BPF 程序 ..."
     mkdir -p "$MAP_DIR"
     bpftool prog load "$BPF_OBJ" "$BPF_PIN" pinmaps "$MAP_DIR"
-    echo "[auto] ✓ 已加载，maps:"
+    echo "[bpf] ✓ 已加载，maps:"
     ls -l "$MAP_DIR/"
 
-    # 挂载 BPF 到 root cgroup（全局生效）
-    echo "[auto] 挂载 BPF 到 root cgroup ..."
+    echo "[bpf] 挂载 BPF 到 root cgroup ..."
     bpftool cgroup attach "$CGROUP_ROOT" cgroup_device \
         pinned "$BPF_PIN" multi || die "BPF 挂载到 root cgroup 失败"
-    echo "[auto] ✓ 已挂载"
+    echo "[bpf] ✓ 已挂载"
 }
 
 # ==================================================================
@@ -348,10 +367,7 @@ cmd_destroy() {
 
     _cg_rmdir "$name"
 
-    # 分离并卸载 BPF 程序
-    _bpf_detach
-    _bpf_unload
-
+    # BPF 程序保持在 root cgroup 上，不卸载（其他沙盒可能仍在使用）
     echo "✓ 沙盒 '${name}' 已销毁"
 }
 

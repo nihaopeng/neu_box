@@ -11,10 +11,6 @@ from flask import Blueprint
 
 status_bp = Blueprint('status', __name__)
 
-# 脚本路径
-_SCRIPT_DIR = os.path.join(os.path.dirname(__file__), '..', 'scripts','info')
-
-
 class Node_Manager:
     """Worker 本地节点状态管理器（单例），提供系统资源查询接口。"""
 
@@ -47,9 +43,8 @@ class Node_Manager:
 
     # ── 设备信息（由独立脚本采集） ─────────────────────────────
 
-    def _run_device_script(self, name: str) -> dict:
+    def _run_device_script(self,path) -> dict:
         """执行 scripts/<name>.sh，解析其 JSON 输出。失败返回全 0。"""
-        path = os.path.join(_SCRIPT_DIR, f'{name}.sh')
         try:
             out = subprocess.check_output(
                 [path],
@@ -62,10 +57,10 @@ class Node_Manager:
             return {'total': 0, 'idle': 0}
 
     def gpu_info(self) -> dict:
-        return self._run_device_script('gpu_info')
+        return self._run_device_script(os.getenv('gpu_info_script_path'))
 
     def npu_info(self) -> dict:
-        return self._run_device_script('npu_info')
+        return self._run_device_script(os.getenv('npu_info_script_path'))
 
     # ── 活跃沙盒 ──────────────────────────────────────────────
 
