@@ -401,3 +401,27 @@ class SbxManager:
                 cleaned += 1
 
         return cleaned
+
+
+    # ── 定时收尸（Reaper） ───────────────────────────────────────
+
+    def _reaper_loop(self):
+        """后台收尸线程主循环。每隔 sandbox_reaper_interval 秒执行一次收尸。"""
+        interval = int(os.getenv('sandbox_reaper_interval', '30'))
+        print(f"[SbxReaper] 定时收尸已启动 (间隔={interval}s)")
+
+        while True:
+            try:
+                time.sleep(interval)
+                cleaned = self.cleanup_orphaned()
+                if cleaned > 0:
+                    print(f"[SbxReaper] 本轮收尸完成: 清理={cleaned}, "
+                          f"剩余沙盒={len(self.db.list_all())}")
+            except Exception as e:
+                print(f"[SbxReaper] 收尸异常: {e}")
+
+    def start_reaper(self):
+        """启动后台收尸线程（daemon 线程，随主进程退出）。"""
+        t = threading.Thread(target=self._reaper_loop, daemon=True, name='sbx-reaper')
+        t.start()
+        return t

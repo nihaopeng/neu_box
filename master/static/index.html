@@ -19,6 +19,7 @@
     <!-- 节点列表 -->
     <div class="section-label">
       节点 <span class="unit" id="nodeCount"></span>
+      <button class="refresh-btn" id="refreshBtn" title="手动刷新节点状态" aria-label="刷新节点">↻</button>
     </div>
     <div class="node-list" id="nodeList">
       <div class="node-card node-card-loading">
@@ -33,7 +34,7 @@
         <label>CPU <span class="unit">核心数</span></label>
         <div class="stepper" data-field="cpu">
           <button type="button" data-action="down" aria-label="减少 CPU">−</button>
-          <span class="value">1</span>
+          <input type="text" class="value" value="不限制" inputmode="numeric">
           <button type="button" data-action="up"   aria-label="增加 CPU">+</button>
         </div>
       </div>
@@ -44,7 +45,7 @@
         <div class="memory-row">
           <div class="stepper" data-field="memory">
             <button type="button" data-action="down" aria-label="减少内存">−</button>
-            <span class="value">1</span>
+            <input type="text" class="value" value="不限制" inputmode="numeric">
             <button type="button" data-action="up"   aria-label="增加内存">+</button>
           </div>
           <div class="memory-unit" id="memUnit">

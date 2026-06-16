@@ -18,10 +18,10 @@ def create():
 
     # 参数校验
     errors = []
-    if not isinstance(cpu, int) or cpu < 1:
-        errors.append('CPU 至少为 1')
-    if not isinstance(memory, int) or memory < 1:
-        errors.append('内存至少为 1')
+    if not isinstance(cpu, int) or cpu < 0:
+        errors.append('CPU 不能为负数')
+    if not isinstance(memory, int) or memory < 0:
+        errors.append('内存不能为负数')
     if mem_unit not in ('MB', 'GB'):
         errors.append('内存单位只能是 MB 或 GB')
     if not isinstance(device_num, int) or device_num < 0:

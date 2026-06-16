@@ -1,15 +1,15 @@
 // ── State ──────────────────────────────────────────────────────
 const state = {
   selectedNodeId: null,
-  cpu:     1,
-  memory:  1,
+  cpu:     0,
+  memory:  0,
   memUnit: 'GB',
   device_num: 0,
 };
 
 const limits = {
-  cpu:    { min: 1,   max: 64   },
-  memory: { min: 1,   max: 256  },
+  cpu:    { min: 0,   max: 64   },
+  memory: { min: 0,   max: 256  },
   device_num: { min: 0, max: 16 },
 };
 
@@ -62,14 +62,14 @@ function cpuUsedPercent(cpuIdle, cpuTotal) {
 
 // ── Node rendering ────────────────────────────────────────────
 
-function renderDeviceChips(idle, total) {
-  if (total === 0) return '<span class="device-text">无</span>';
+function renderDeviceChips(idle) {
+  if (idle === 0) return '<span class="device-text">无</span>';
   let html = '<span class="device-chips">';
-  for (let i = 0; i < total; i++) {
-    html += `<span class="device-chip ${i < (total - idle) ? 'used' : 'idle'}"></span>`;
+  for (let i = 0; i < idle; i++) {
+    html += `<span class="device-chip idle"></span>`;
   }
   html += '</span>';
-  html += `<span class="device-text">${idle}/${total} 空闲</span>`;
+  html += `<span class="device-text">${idle} 可用</span>`;
   return html;
 }
 
@@ -113,11 +113,11 @@ function renderNodeCard(node) {
         </div>
         <div class="device-row">
           <span class="device-label">GPU</span>
-          ${renderDeviceChips(node.idle_gpu, node.total_gpu)}
+          ${renderDeviceChips(node.idle_gpu)}
         </div>
         <div class="device-row">
           <span class="device-label">NPU</span>
-          ${renderDeviceChips(node.idle_npu, node.total_npu)}
+          ${renderDeviceChips(node.idle_npu)}
         </div>
         ${node.active_sandboxes > 0 ? `
         <div class="sandbox-count">${node.active_sandboxes} 个沙盒运行中</div>
@@ -197,9 +197,9 @@ async function fetchNodes() {
   }
 }
 
-// 页面加载时获取节点列表，之后每 15 秒刷新
+// 页面加载时获取节点列表，之后每 60 秒自动刷新
 fetchNodes();
-setInterval(fetchNodes, 15000);
+setInterval(fetchNodes, 60000);
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -235,10 +235,35 @@ function closeTerminal() {
 
 // ── Stepper events ────────────────────────────────────────────
 
+// ── Value display helpers ──────────────────────────────────────
+
+function setValDisplay(el, field, val) {
+  if (val === 0 && field !== 'device_num') {
+    if (el.tagName === 'INPUT') el.value = '不限制';
+    else el.textContent = '不限制';
+    el.classList.add('no-limit');
+  } else {
+    if (el.tagName === 'INPUT') el.value = val;
+    else el.textContent = val;
+    el.classList.remove('no-limit');
+  }
+}
+
+function parseValInput(el, field) {
+  const raw = (el.tagName === 'INPUT' ? el.value : el.textContent).trim();
+  if (raw === '不限制' || raw === '') return 0;
+  const n = parseInt(raw, 10);
+  if (isNaN(n) || n < 0) return state[field]; // 非法输入，回退
+  return n;
+}
+
+// ── Stepper events ────────────────────────────────────────────
+
 document.querySelectorAll('.stepper').forEach(stepper => {
   const field = stepper.dataset.field;
   const valEl = stepper.querySelector('.value');
 
+  // 按钮点击：增减
   stepper.addEventListener('click', (e) => {
     const btn = e.target.closest('button');
     if (!btn) return;
@@ -251,10 +276,31 @@ document.querySelectorAll('.stepper').forEach(stepper => {
     if (next < lim.min || next > lim.max) return;
 
     state[field] = next;
-    valEl.textContent = next;
+    setValDisplay(valEl, field, next);
     updateButtons(stepper, field);
   });
 
+  // 手动输入提交：blur 或 Enter
+  const commitInput = () => {
+    let val = parseValInput(valEl, field);
+    const lim = limits[field];
+    if (val < lim.min) val = lim.min;
+    if (val > lim.max) val = lim.max;
+    state[field] = val;
+    setValDisplay(valEl, field, val);
+    updateButtons(stepper, field);
+  };
+
+  valEl.addEventListener('blur', commitInput);
+  valEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      valEl.blur();
+    }
+  });
+
+  // 初始化显示
+  setValDisplay(valEl, field, state[field]);
   updateButtons(stepper, field);
 });
 
@@ -269,21 +315,32 @@ memUnitEl.addEventListener('click', (e) => {
   state.memUnit = btn.dataset.unit;
 
   if (state.memUnit === 'GB') {
-    limits.memory = { min: 1, max: 256 };
+    limits.memory = { min: 0, max: 256 };
     if (state.memory > 256) state.memory = 256;
   } else {
-    limits.memory = { min: 512, max: 65536 };
-    if (state.memory < 512) state.memory = 512;
+    limits.memory = { min: 0, max: 65536 };
+    if (state.memory > 65536) state.memory = 65536;
   }
 
   const memStepper = document.querySelector('[data-field=memory]');
-  memStepper.querySelector('.value').textContent = state.memory;
+  const memValEl = memStepper.querySelector('.value');
+  setValDisplay(memValEl, 'memory', state.memory);
   updateButtons(memStepper, 'memory');
 });
 
 // ── Terminal close ────────────────────────────────────────────
 
 terminalClose.addEventListener('click', closeTerminal);
+
+// ── Manual refresh ────────────────────────────────────────────
+
+const refreshBtn = document.getElementById('refreshBtn');
+refreshBtn.addEventListener('click', () => {
+  refreshBtn.classList.add('spinning');
+  fetchNodes().finally(() => {
+    refreshBtn.classList.remove('spinning');
+  });
+});
 
 // ── Form submit ───────────────────────────────────────────────
 
@@ -330,6 +387,9 @@ form.addEventListener('submit', async (e) => {
       }
 
       resultDiv.style.display = 'block';
+
+      // 立即刷新节点状态，反映最新的资源占用
+      fetchNodes();
     } else {
       showToast(data.error || '申请失败', 'error');
       resultDiv.className = 'result error';

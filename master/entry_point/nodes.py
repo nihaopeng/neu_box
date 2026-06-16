@@ -6,8 +6,10 @@ nodes_bp = flask.Blueprint('nodes', __name__)
 
 @nodes_bp.route('/get_all_nodes', methods=['POST'])
 def get_all_nodes():
-    """返回所有已注册节点的列表及当前状态，供前端选择器使用。"""
+    """返回所有已注册节点的列表及当前状态，供前端选择器使用。
+    每次请求时主动向所有 worker 查询一次实时状态，确保前端拿到最新数据。"""
     pool = Nodes_Pool.get_nodes_pool()
+    pool.query_all_nodes_status()
     nodes_info = pool.get_all_nodes()
     return {'nodes': nodes_info}, 200
 
