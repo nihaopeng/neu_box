@@ -28,6 +28,10 @@ def create():
         errors.append('内存单位只能是 MB 或 GB')
     if not isinstance(device_num, int) or device_num < 0:
         errors.append('设备数不能为负数')
+    if not username or not isinstance(username, str) or not username.strip():
+        errors.append('用户名不能为空')
+    if not password or not isinstance(password, str):
+        errors.append('密码不能为空')
 
     if errors:
         return {'error': '; '.join(errors)}, 400

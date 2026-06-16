@@ -354,6 +354,17 @@ form.addEventListener('submit', async (e) => {
     return;
   }
 
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value;
+  if (!username) {
+    showToast('请输入用户名', 'error');
+    return;
+  }
+  if (!password) {
+    showToast('请输入密码', 'error');
+    return;
+  }
+
   submitBtn.disabled = true;
   submitBtn.textContent = '正在申请…';
   resultDiv.style.display = 'none';
@@ -364,8 +375,8 @@ form.addEventListener('submit', async (e) => {
     memory:   state.memory,
     mem_unit: state.memUnit,
     device_num: state.device_num,
-    username: usernameInput.value.trim(),
-    password: passwordInput.value,
+    username: username,
+    password: password,
   };
 
   try {

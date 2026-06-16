@@ -48,8 +48,10 @@ def create():
             ttyd_cmd.extend(['-u', str(pw.pw_uid),
                              '-g', str(pw.pw_gid),
                              '-w', pw.pw_dir])
-
-        ttyd_cmd.append('bash')
+            # 显式设置 HOME，否则 bash 会尝试读 /root/.bashrc 导致 Permission denied
+            ttyd_cmd.extend(['env', f'HOME={pw.pw_dir}', 'bash'])
+        else:
+            ttyd_cmd.append('bash')
 
         # 3. 启动 ttyd，绑定拿到的黄金端口
         process = subprocess.Popen(
