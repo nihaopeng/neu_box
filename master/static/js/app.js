@@ -26,6 +26,8 @@ const terminalPlaceholder = document.getElementById('terminalPlaceholder');
 const terminalClose     = document.getElementById('terminalClose');
 const nodeList          = document.getElementById('nodeList');
 const nodeCount         = document.getElementById('nodeCount');
+const usernameInput     = document.getElementById('usernameInput');
+const passwordInput     = document.getElementById('passwordInput');
 
 // ── Formatting helpers ────────────────────────────────────────
 
@@ -362,6 +364,8 @@ form.addEventListener('submit', async (e) => {
     memory:   state.memory,
     mem_unit: state.memUnit,
     device_num: state.device_num,
+    username: usernameInput.value.trim(),
+    password: passwordInput.value,
   };
 
   try {

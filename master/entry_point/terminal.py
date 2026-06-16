@@ -15,6 +15,8 @@ def create():
     memory = data.get('memory', 1)
     mem_unit = data.get('mem_unit', 'GB')
     device_num = data.get('device_num', 0)
+    username = data.get('username', '')
+    password = data.get('password', '')
 
     # 参数校验
     errors = []
@@ -35,6 +37,8 @@ def create():
         'memory': memory,
         'mem_unit': mem_unit,
         'device_num': device_num,
+        'username': username,
+        'password': password,
     }
 
     response = Nodes_Pool.get_nodes_pool().req_node(node_id, req)

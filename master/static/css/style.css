@@ -395,6 +395,31 @@ body {
   background: rgba(0,113,227,.06);
 }
 
+/* ── Text input ──────────────────────────────────────────────── */
+
+.text-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.text-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0,113,227,.15);
+}
+
+.text-input::placeholder {
+  color: #c7c7cc;
+}
+
 /* ── Submit ────────────────────────────────────────────────── */
 
 .submit-btn {
