@@ -9,14 +9,19 @@
 <body>
 
 <div class="layout">
-  <!-- 左侧：节点列表 + 申请表单 -->
+
+  <!-- ═══ 左栏：表单 ═══ -->
   <div class="panel panel-form" id="formPanel">
     <div class="header">
       <h1>neu_box</h1>
-      <p>申请终端沙盒</p>
+      <!-- 模式切换 -->
+      <div class="mode-toggle" id="modeToggle">
+        <button type="button" data-mode="terminal" class="active">终端</button>
+        <button type="button" data-mode="command">任务</button>
+      </div>
     </div>
 
-    <!-- 节点列表 -->
+    <!-- 节点列表（共用） -->
     <div class="section-label">
       节点 <span class="unit" id="nodeCount"></span>
       <button class="refresh-btn" id="refreshBtn" title="手动刷新节点状态" aria-label="刷新节点">↻</button>
@@ -28,8 +33,8 @@
       </div>
     </div>
 
-    <form id="terminalForm">
-      <!-- CPU -->
+    <form id="mainForm" novalidate>
+      <!-- CPU（共用） -->
       <div class="field">
         <label>CPU <span class="unit">核心数</span></label>
         <div class="stepper" data-field="cpu">
@@ -39,7 +44,7 @@
         </div>
       </div>
 
-      <!-- 内存 -->
+      <!-- 内存（共用） -->
       <div class="field">
         <label>内存</label>
         <div class="memory-row">
@@ -55,7 +60,7 @@
         </div>
       </div>
 
-      <!-- 异构设备数 -->
+      <!-- 异构设备数（共用） -->
       <div class="field">
         <label>异构设备 <span class="unit">GPU/NPU 卡数</span></label>
         <div class="stepper" data-field="device_num">
@@ -65,18 +70,35 @@
         </div>
       </div>
 
-      <!-- 用户名 -->
-      <div class="field">
-        <label>用户名 <span class="unit">必填</span></label>
-        <input type="text" class="text-input" id="usernameInput" placeholder="输入系统用户名" autocomplete="off" required>
+      <!-- ── 终端模式字段 ── -->
+      <div id="terminalFields">
+        <div class="field">
+          <label>用户名 <span class="unit">必填</span></label>
+          <input type="text" class="text-input" id="usernameInput" placeholder="输入系统用户名" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>密码 <span class="unit">必填</span></label>
+          <input type="password" class="text-input" id="passwordInput" placeholder="输入终端登录密码" autocomplete="off">
+        </div>
       </div>
 
-      <!-- 密码 -->
-      <div class="field">
-        <label>密码 <span class="unit">必填</span></label>
-        <input type="password" class="text-input" id="passwordInput" placeholder="输入终端登录密码" autocomplete="off" required>
+      <!-- ── 命令模式字段 ── -->
+      <div id="commandFields" style="display:none">
+        <div class="field">
+          <label>用户标识 <span class="unit">用于查看自己日志</span></label>
+          <input type="text" class="text-input" id="cmdUserId" placeholder="输入你的用户ID" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>密码 <span class="unit">必填</span></label>
+          <input type="password" class="text-input" id="cmdPassword" placeholder="保护你的日志" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>命令</label>
+          <input type="text" class="text-input" id="cmdInput" placeholder="例如: nvidia-smi / echo hello" autocomplete="off">
+        </div>
       </div>
 
+      <!-- 提交按钮 -->
       <button type="submit" class="submit-btn" id="submitBtn" disabled>
         申请终端
       </button>
@@ -85,21 +107,48 @@
     <div class="result" id="result"></div>
   </div>
 
-  <!-- 右侧：终端 iframe -->
-  <div class="panel panel-terminal" id="terminalPanel">
-    <div class="terminal-header">
+  <!-- ═══ 中栏：任务队列 ═══ -->
+  <div class="panel panel-queue" id="queuePanel">
+    <div class="queue-header">
+      <span class="section-label" style="margin-bottom:0">任务队列</span>
+      <button class="refresh-btn" id="queueRefreshBtn" title="刷新队列" aria-label="刷新队列">↻</button>
+    </div>
+    <div class="queue-list" id="queueList">
+      <div class="queue-empty">选择节点后刷新</div>
+    </div>
+  </div>
+
+  <!-- ═══ 右栏：终端 / 日志查看 ═══ -->
+  <div class="panel panel-right" id="rightPanel">
+    <!-- 终端头 -->
+    <div class="terminal-header" id="terminalHeader">
       <span class="terminal-dot dot-red"></span>
       <span class="terminal-dot dot-yellow"></span>
       <span class="terminal-dot dot-green"></span>
       <span class="terminal-url" id="terminalUrl"></span>
       <button class="terminal-close" id="terminalClose" title="关闭终端">×</button>
     </div>
+
+    <!-- 终端占位 -->
     <div class="terminal-placeholder" id="terminalPlaceholder">
       <div class="placeholder-icon">⌨</div>
       <p>选择一个节点并申请终端沙盒以开始</p>
     </div>
-    <iframe class="terminal-iframe" id="terminalIframe" src="" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+
+    <!-- 终端 iframe -->
+    <iframe class="terminal-iframe" id="terminalIframe" src=""
+            sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+
+    <!-- 日志查看器（任务模式） -->
+    <div class="log-viewer" id="logViewer">
+      <div class="log-placeholder" id="logPlaceholder">
+        <div class="placeholder-icon">📋</div>
+        <p>点击队列中你自己的已完成任务查看日志</p>
+      </div>
+      <div class="log-content" id="logContent" style="display:none"></div>
+    </div>
   </div>
+
 </div>
 
 <div class="toast" id="toast"></div>

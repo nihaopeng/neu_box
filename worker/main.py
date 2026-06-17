@@ -6,11 +6,13 @@ load_dotenv()
 
 from executor.terminal import terminal_bp
 from executor.status import status_bp
+from executor.command import command_bp
 from executor.sbx_manager import SbxManager
 
 app = flask.Flask(__name__)
 
 app.register_blueprint(terminal_bp, url_prefix='/terminal')
+app.register_blueprint(command_bp, url_prefix='/command')
 # /status 直接挂载到根路径，方便 master 查询
 app.register_blueprint(status_bp)
 

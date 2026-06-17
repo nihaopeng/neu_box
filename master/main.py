@@ -11,12 +11,14 @@ class Config:
         return self._instance
 
 from entry_point.terminal import terminal_bp
+from entry_point.command import command_bp
 from entry_point.nodes import nodes_bp
 from src_manager.nodes_pool import Nodes_Pool
 
 app = flask.Flask(__name__, static_folder='static', static_url_path='/static')
 
 app.register_blueprint(terminal_bp, url_prefix='/terminal')
+app.register_blueprint(command_bp, url_prefix='/command')
 app.register_blueprint(nodes_bp, url_prefix='/nodes')
 
 

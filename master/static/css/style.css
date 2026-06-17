@@ -30,9 +30,9 @@ body {
 
 .layout {
   display: flex;
-  gap: 20px;
+  gap: 16px;
   height: calc(100vh - 48px);
-  max-width: 1400px;
+  max-width: 100%;
   margin: 0 auto;
 }
 
@@ -43,52 +43,78 @@ body {
   overflow: hidden;
 }
 
-/* ── Form panel (left) ─────────────────────────────────────── */
+/* ── Left: form panel ──────────────────────────────────────── */
 
 .panel-form {
-  width: 380px;
+  width: 340px;
   flex-shrink: 0;
-  padding: 24px 20px;
+  padding: 20px 16px;
   overflow-y: auto;
   align-self: stretch;
 }
 
 .header {
   text-align: center;
-  margin-bottom: 28px;
+  margin-bottom: 20px;
 }
 
 .header h1 {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.3px;
+  margin-bottom: 10px;
 }
 
-.header p {
+/* ── Mode toggle ───────────────────────────────────────────── */
+
+.mode-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  width: fit-content;
+  margin: 0 auto;
+}
+
+.mode-toggle button {
+  padding: 7px 20px;
+  border: none;
+  background: transparent;
   font-size: 13px;
+  font-weight: 500;
   color: var(--sub);
-  margin-top: 4px;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.mode-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mode-toggle button:not(.active):hover {
+  background: rgba(0,113,227,.06);
 }
 
 /* ── Field ─────────────────────────────────────────────────── */
 
 .field {
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 
 .field label {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--sub);
-  margin-bottom: 6px;
+  margin-bottom: 5px;
 }
 
 .field label .unit {
   font-weight: 400;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 /* ── Section label ──────────────────────────────────────────── */
@@ -146,16 +172,16 @@ body {
 .node-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 20px;
-  max-height: 320px;
+  gap: 6px;
+  margin-bottom: 16px;
+  max-height: 260px;
   overflow-y: auto;
 }
 
 .node-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 8px 10px;
   cursor: pointer;
   transition: border-color .15s, box-shadow .15s;
   background: var(--card-bg);
@@ -175,8 +201,8 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  padding: 10px 12px;
+  font-size: 12px;
+  padding: 8px 10px;
 }
 
 /* ── Node card header ───────────────────────────────────────── */
@@ -185,11 +211,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .node-card-addr {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text);
 }
@@ -209,25 +235,25 @@ body {
 .node-resources {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 .resource-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .resource-label {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--sub);
-  width: 32px;
+  width: 28px;
   flex-shrink: 0;
 }
 
 .progress-bar {
   flex: 1;
-  height: 6px;
+  height: 5px;
   background: #e5e5e7;
   border-radius: 3px;
   overflow: hidden;
@@ -246,7 +272,7 @@ body {
 .resource-text {
   font-size: 10px;
   color: var(--sub);
-  width: 52px;
+  width: 50px;
   flex-shrink: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -257,13 +283,13 @@ body {
 .device-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .device-label {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--sub);
-  width: 32px;
+  width: 28px;
   flex-shrink: 0;
 }
 
@@ -274,8 +300,8 @@ body {
 }
 
 .device-chip {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 2px;
   flex-shrink: 0;
 }
@@ -290,7 +316,7 @@ body {
 }
 
 .sandbox-count {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--sub);
   margin-top: 2px;
 }
@@ -307,8 +333,8 @@ body {
 }
 
 .stepper button {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border: none;
   background: transparent;
   font-size: 18px;
@@ -332,18 +358,18 @@ body {
 .stepper .value {
   flex: 1;
   text-align: center;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   border: none;
   background: transparent;
   outline: none;
-  width: 0;          /* flex: 1 控制实际宽度 */
+  width: 0;
   min-width: 0;
   padding: 0 4px;
   color: inherit;
   font-family: inherit;
-  line-height: 40px;
+  line-height: 36px;
 }
 
 .stepper .value:focus {
@@ -352,7 +378,7 @@ body {
 }
 
 .stepper .value.no-limit {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 400;
   color: var(--sub);
 }
@@ -361,7 +387,7 @@ body {
 
 .memory-row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .memory-row .stepper {
@@ -376,10 +402,10 @@ body {
 }
 
 .memory-unit button {
-  padding: 10px 14px;
+  padding: 8px 12px;
   border: none;
   background: transparent;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--sub);
   cursor: pointer;
@@ -399,11 +425,11 @@ body {
 
 .text-input {
   width: 100%;
-  height: 40px;
-  padding: 0 12px;
+  height: 36px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  font-size: 14px;
+  font-size: 13px;
   font-family: inherit;
   color: var(--text);
   background: var(--bg);
@@ -424,13 +450,13 @@ body {
 
 .submit-btn {
   width: 100%;
-  height: 46px;
-  margin-top: 28px;
+  height: 42px;
+  margin-top: 20px;
   border: none;
   border-radius: var(--radius);
   background: var(--accent);
   color: #fff;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: background .15s, transform .1s;
@@ -443,12 +469,6 @@ body {
   background: #a1a1a6;
   cursor: not-allowed;
   transform: none;
-}
-
-.submit-btn.has-terminal {
-  margin-top: 14px;
-  font-size: 13px;
-  height: 38px;
 }
 
 /* ── Toast ─────────────────────────────────────────────────── */
@@ -485,11 +505,11 @@ body {
 /* ── Result card ───────────────────────────────────────────── */
 
 .result {
-  margin-top: 20px;
-  padding: 14px 16px;
+  margin-top: 14px;
+  padding: 12px 14px;
   background: #f2fcf5;
   border-radius: var(--radius);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.6;
   display: none;
 }
@@ -502,12 +522,123 @@ body {
   background: rgba(0,0,0,.06);
   padding: 2px 6px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
 }
 
-/* ── Terminal panel (right) ────────────────────────────────── */
+/* ── Middle: queue panel ────────────────────────────────────── */
 
-.panel-terminal {
+.panel-queue {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+}
+
+.queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 14px 0;
+  flex-shrink: 0;
+}
+
+.queue-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.queue-empty {
+  font-size: 12px;
+  color: var(--sub);
+  text-align: center;
+  padding: 24px 0;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 11px;
+  cursor: default;
+  transition: background .15s;
+}
+
+.queue-item.running {
+  background: #e8f4fd;
+  border: 1px solid rgba(0,113,227,.2);
+}
+
+.queue-item.clickable {
+  cursor: pointer;
+}
+
+.queue-item.clickable:hover {
+  background: #e8f4fd;
+}
+
+.queue-pos {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #e5e5e7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.queue-item.running .queue-pos {
+  background: var(--accent);
+  color: #fff;
+}
+
+.queue-user {
+  font-weight: 500;
+  color: var(--text);
+  min-width: 0;
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.queue-cmd {
+  flex: 1;
+  color: var(--sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.queue-status {
+  font-size: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.queue-status.queued   { color: #8e8e93; background: #e5e5e7; }
+.queue-status.running  { color: var(--accent); background: rgba(0,113,227,.1); }
+.queue-status.completed { color: #30d158; background: rgba(48,209,88,.1); }
+.queue-status.failed   { color: var(--danger); background: rgba(255,59,48,.1); }
+
+/* ── Right: terminal / log panel ────────────────────────────── */
+
+.panel-right {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -519,7 +650,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 10px 14px;
   background: #fafafa;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -538,7 +669,7 @@ body {
 
 .terminal-url {
   flex: 1;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--sub);
   text-align: center;
   overflow: hidden;
@@ -595,6 +726,85 @@ body {
   background: #000;
 }
 
-/* active states */
-.panel-terminal.active .terminal-placeholder { display: none; }
-.panel-terminal.active .terminal-iframe       { display: block; }
+/* active states for terminal */
+.panel-right.mode-terminal .terminal-placeholder { display: flex; }
+.panel-right.mode-terminal .terminal-iframe       { display: none; }
+.panel-right.mode-terminal.active .terminal-placeholder { display: none; }
+.panel-right.mode-terminal.active .terminal-iframe       { display: block; }
+
+/* ── Log viewer (command mode) ──────────────────────────────── */
+
+.log-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #1d1d1f;
+  overflow: hidden;
+}
+
+.panel-right.mode-terminal .log-viewer { display: none; }
+.panel-right.mode-command .log-viewer { display: flex; }
+
+.panel-right.mode-command .terminal-header,
+.panel-right.mode-command .terminal-placeholder,
+.panel-right.mode-command .terminal-iframe {
+  display: none;
+}
+
+.log-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #636366;
+  gap: 12px;
+}
+
+.log-placeholder .placeholder-icon {
+  font-size: 48px;
+  opacity: .5;
+}
+
+.log-placeholder p {
+  font-size: 14px;
+}
+
+.log-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  color: #e5e5e7;
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-content .log-meta {
+  color: #8e8e93;
+  font-size: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #3a3a3c;
+  white-space: normal;
+  line-height: 1.8;
+}
+
+.log-content .log-meta strong {
+  color: #e5e5e7;
+}
+
+.log-content .log-stdout {
+  color: #e5e5e7;
+}
+
+.log-content .log-stderr {
+  color: #ff5f57;
+}
+
+.log-content .log-no-output {
+  color: #636366;
+  font-style: italic;
+}

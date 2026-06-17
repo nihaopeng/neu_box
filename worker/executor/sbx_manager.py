@@ -1,5 +1,5 @@
 """沙盒资源分配管理 — 调用 sandbox.sh 实现 cgroup v2 + eBPF 设备隔离。
-沙盒状态持久化到本地文件，防止掉线后重复开沙盒出问题。
+沙盒状态持久化到 SQLite，防止掉线后重复开沙盒出问题。
 
 设备分配模型:
   - 从 .env 读取单一的 device_major（如 235 即 NPU，195 即 GPU）
@@ -15,57 +15,9 @@ import stat
 import subprocess
 import threading
 import time
-from pathlib import Path
 from typing import Optional, List
 
-
-# ==================================================================
-# SandboxDB — 本地 JSON 文件持久化
-# ==================================================================
-
-class SandboxDB:
-    """每个沙盒一个 JSON 文件，存于 sandbox_db_dir 目录下。"""
-
-    def __init__(self, db_dir: str):
-        self.db_dir = Path(db_dir)
-        self.db_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-
-    def _path(self, name: str) -> Path:
-        return self.db_dir / f"{name}.json"
-
-    def save(self, name: str, data: dict) -> None:
-        with self._lock:
-            with open(self._path(name), 'w') as f:
-                json.dump(data, f, indent=2)
-
-    def load(self, name: str) -> Optional[dict]:
-        path = self._path(name)
-        if not path.exists():
-            return None
-        with open(path) as f:
-            return json.load(f)
-
-    def delete(self, name: str) -> None:
-        with self._lock:
-            path = self._path(name)
-            if path.exists():
-                path.unlink()
-
-    def list_all(self) -> List[str]:
-        names = []
-        for f in self.db_dir.glob("*.json"):
-            names.append(f.stem)
-        return names
-
-    def load_all_records(self) -> List[dict]:
-        """加载所有沙盒记录。"""
-        records = []
-        for name in self.list_all():
-            rec = self.load(name)
-            if rec:
-                records.append(rec)
-        return records
+from executor.db import Database
 
 
 # ==================================================================
@@ -91,10 +43,8 @@ class SbxManager:
         # 设备 major 号（单一值，从环境变量读取，默认 235 = NPU）
         self.device_major = int(os.getenv('device_major', '235'))
 
-        # 本地 DB
-        db_dir = os.getenv('sandbox_db_dir',
-                           os.path.join(os.path.expanduser('~'), '.neu_box', 'sandboxes'))
-        self.db = SandboxDB(db_dir)
+        # 本地 DB（统一 SQLite）
+        self.db = Database.get_instance()
 
         # 线程安全
         self._lock = threading.Lock()
@@ -144,10 +94,14 @@ class SbxManager:
     def _get_allocated_devices(self) -> set:
         """扫描 DB 中所有活跃沙盒，汇总已分配的设备号集合。"""
         allocated = set()
-        for rec in self.db.load_all_records():
+        for rec in self.db.list_sandboxes():
             for dev in rec.get('devices', []):
                 allocated.add(dev)
         return allocated
+
+    def _list_sandbox_names(self) -> List[str]:
+        """返回所有沙盒名称列表（兼容旧 SandboxDB.list_all 接口）。"""
+        return [s['name'] for s in self.db.list_sandboxes()]
 
     def _get_free_devices(self) -> List[str]:
         """返回当前空闲的设备节点列表（全部 - 已分配），按 minor 排序。"""
@@ -160,10 +114,10 @@ class SbxManager:
 
     def _recover_on_startup(self):
         """重启后核对 DB 与 cgroup 实际状态，清理已不存在的沙盒记录。"""
-        for name in self.db.list_all():
+        for name in self._list_sandbox_names():
             if not os.path.isdir(self._cg_path(name)):
                 print(f"[SbxManager] 恢复: 沙盒 '{name}' 的 cgroup 已不存在，清理 DB 记录")
-                self.db.delete(name)
+                self.db.delete_sandbox(name)
             else:
                 print(f"[SbxManager] 恢复: 沙盒 '{name}' 仍存活")
 
@@ -214,7 +168,7 @@ class SbxManager:
         with self._lock:
             # 已存在且在 cgroup 中有效 → 直接返回
             if os.path.isdir(self._cg_path(name)):
-                existing = self.db.load(name)
+                existing = self.db.get_sandbox(name)
                 if existing:
                     print(f"[SbxManager] 沙盒 '{name}' 已存在，跳过创建")
                     return True
@@ -231,15 +185,11 @@ class SbxManager:
                 return False
 
             # 写入 DB
-            self.db.save(name, {
-                'name': name,
-                'cpu': cpu,
-                'mem': mem,
-                'devices': devices or [],
-                'cgroup_path': self._cg_path(name),
-                'created_at': time.time(),
-                'pids': [],
-            })
+            self.db.insert_sandbox(
+                name=name, cpu=cpu, mem=mem,
+                devices=devices or [],
+                cgroup_path=self._cg_path(name),
+                pids=[])
             print(f"[SbxManager] ✓ 沙盒 '{name}' 创建成功")
             return True
 
@@ -250,7 +200,7 @@ class SbxManager:
             True 表示加入成功。
         """
         with self._lock:
-            record = self.db.load(name)
+            record = self.db.get_sandbox(name)
             if not record:
                 print(f"[SbxManager] 加入失败: 沙盒 '{name}' 不在 DB 中")
                 return False
@@ -265,7 +215,7 @@ class SbxManager:
             if pid not in pids:
                 pids.append(pid)
                 record['pids'] = pids
-                self.db.save(name, record)
+                self.db.update_sandbox_pids(name, pids)
 
             print(f"[SbxManager] ✓ PID {pid} 已加入沙盒 '{name}'")
             return True
@@ -278,7 +228,7 @@ class SbxManager:
         """
         with self._lock:
             if not os.path.isdir(self._cg_path(name)):
-                self.db.delete(name)
+                self.db.delete_sandbox(name)
                 return True
 
             result = self._run_script('destroy', name)
@@ -286,10 +236,10 @@ class SbxManager:
                 print(f"[SbxManager] 销毁沙盒 '{name}' 失败: {result.stderr.strip()}")
                 # 如果 cgroup 确实没了，至少清理 DB
                 if not os.path.isdir(self._cg_path(name)):
-                    self.db.delete(name)
+                    self.db.delete_sandbox(name)
                 return False
 
-            self.db.delete(name)
+            self.db.delete_sandbox(name)
             print(f"[SbxManager] ✓ 沙盒 '{name}' 已销毁")
             return True
 
@@ -304,7 +254,7 @@ class SbxManager:
 
     def list_sandboxes(self) -> List[str]:
         """列出 DB 中所有沙盒名称。"""
-        return self.db.list_all()
+        return self._list_sandbox_names()
 
     # ── 终端专用 ─────────────────────────────────────────────────
 
@@ -363,8 +313,8 @@ class SbxManager:
             清理的沙盒数量。
         """
         cleaned = 0
-        for name in self.db.list_all():
-            record = self.db.load(name)
+        for name in self._list_sandbox_names():
+            record = self.db.get_sandbox(name)
             if not record:
                 continue
 
@@ -381,7 +331,7 @@ class SbxManager:
                         cleaned += 1
                 except (OSError, IOError):
                     # cgroup 目录可能已不存在
-                    self.db.delete(name)
+                    self.db.delete_sandbox(name)
                     cleaned += 1
                 continue
 
@@ -416,7 +366,7 @@ class SbxManager:
                 cleaned = self.cleanup_orphaned()
                 if cleaned > 0:
                     print(f"[SbxReaper] 本轮收尸完成: 清理={cleaned}, "
-                          f"剩余沙盒={len(self.db.list_all())}")
+                          f"剩余沙盒={len(self._list_sandbox_names())}")
             except Exception as e:
                 print(f"[SbxReaper] 收尸异常: {e}")
 

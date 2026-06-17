@@ -233,17 +233,58 @@ class Nodes_Pool:
             except requests.RequestException:
                 node.status = 'offline'
 
-    # ── 向指定节点转发终端创建请求 ─────────────────────────────
+    # ── 通用转发 ────────────────────────────────────────────────
 
-    def req_node(self, node_id: str, req: dict) -> dict:
-        """向 worker 发送终端创建请求"""
+    def forward_to_node(self, node_id: str, endpoint: str,
+                        req: dict, timeout: int = 30) -> requests.Response:
+        """向指定 worker 节点转发请求。
+
+        Args:
+            node_id:  目标节点 UUID
+            endpoint: Worker 上的路径，如 '/terminal/create', '/command/run'
+            req:      JSON 请求体
+            timeout:  HTTP 超时秒数
+
+        Returns:
+            requests.Response 对象
+        """
         node = self.get_node_by_id(node_id)
         if not node:
             raise ValueError(f'节点 {node_id} 不存在')
         resp = requests.post(
-            f'http://{node.ip}:{node.port}/terminal/create',
+            f'http://{node.ip}:{node.port}{endpoint}',
             json=req,
-            timeout=30,
+            timeout=timeout,
         )
-        print(f'[Nodes_Pool] 请求节点 {node_id} 创建终端，响应状态 {resp.status_code}, 内容 {resp.text}')
+        print(f'[Nodes_Pool] 转发 → {node_id} {endpoint} 状态 {resp.status_code}')
         return resp
+
+    def forward_get_to_node(self, node_id: str, endpoint: str,
+                            params: dict = None, timeout: int = 30) -> requests.Response:
+        """向指定 worker 节点转发 GET 请求。
+
+        Args:
+            node_id:  目标节点 UUID
+            endpoint: Worker 上的路径，如 '/command/queue'
+            params:   URL 查询参数
+            timeout:  HTTP 超时秒数
+
+        Returns:
+            requests.Response 对象
+        """
+        node = self.get_node_by_id(node_id)
+        if not node:
+            raise ValueError(f'节点 {node_id} 不存在')
+        resp = requests.get(
+            f'http://{node.ip}:{node.port}{endpoint}',
+            params=params,
+            timeout=timeout,
+        )
+        print(f'[Nodes_Pool] GET → {node_id} {endpoint} 状态 {resp.status_code}')
+        return resp
+
+    # ── 向指定节点转发终端创建请求（兼容旧接口）────────────────
+
+    def req_node(self, node_id: str, req: dict) -> dict:
+        """向 worker 发送终端创建请求"""
+        return self.forward_to_node(node_id, '/terminal/create', req)
