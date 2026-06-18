@@ -1,5 +1,46 @@
 import json
+import logging
+import os
+import time
+from logging.handlers import RotatingFileHandler
+
 import flask
+
+# ── 集中日志配置 ─────────────────────────────────────────────
+_log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+os.makedirs(_log_dir, exist_ok=True)
+
+# 解析日志级别（兼容 .env 中带引号的写法）
+_raw_level = os.getenv('LOG_LEVEL', 'INFO').strip().strip('"').strip("'").upper()
+_log_level = getattr(logging, _raw_level, logging.INFO)
+
+_log_fmt = logging.Formatter(
+    '%(asctime)s [%(name)s] %(levelname)s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+
+# 按启动时间命名日志文件，每次重启写新文件
+_start_ts = time.strftime('%Y%m%d-%H%M%S')
+_log_file = os.path.join(_log_dir, f'master-{_start_ts}.log')
+
+_file_handler = RotatingFileHandler(
+    _log_file, maxBytes=10 * 1024 * 1024, backupCount=5,
+)
+_file_handler.setFormatter(_log_fmt)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_log_fmt)
+
+# 文件、控制台、root logger 统一使用 LOG_LEVEL
+_file_handler.setLevel(_log_level)
+_console_handler.setLevel(_log_level)
+_root_logger = logging.getLogger()
+_root_logger.setLevel(_log_level)
+_root_logger.addHandler(_file_handler)
+_root_logger.addHandler(_console_handler)
+
+logging.getLogger('master').info('Master 启动，日志级别=%s，日志文件=%s', _raw_level, _log_file)
+
 
 class Config:
     def __init__(self):

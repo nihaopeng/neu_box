@@ -75,6 +75,12 @@ class Database:
         except sqlite3.OperationalError:
             pass  # 列已存在
 
+        # 兼容旧表：添加 port 列（如果不存在）
+        try:
+            conn.execute("ALTER TABLE sandboxes ADD COLUMN port INTEGER")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+
         conn.executescript('''
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id     TEXT PRIMARY KEY,
@@ -106,7 +112,8 @@ class Database:
                 devices     TEXT    DEFAULT '[]',
                 cgroup_path TEXT,
                 created_at  REAL,
-                pids        TEXT    DEFAULT '[]'
+                pids        TEXT    DEFAULT '[]',
+                port        INTEGER
             );
         ''')
         conn.commit()
@@ -229,14 +236,14 @@ class Database:
 
     def insert_sandbox(self, name: str, cpu: int = 0, mem: str = "0",
                        devices: list = None, cgroup_path: str = "",
-                       pids: list = None):
+                       pids: list = None, port: int = None):
         conn = self._get_conn()
         conn.execute(
             'INSERT OR REPLACE INTO sandboxes '
-            '(name, cpu, mem, devices, cgroup_path, created_at, pids) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            '(name, cpu, mem, devices, cgroup_path, created_at, pids, port) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             (name, cpu, mem, json.dumps(devices or []), cgroup_path,
-             time.time(), json.dumps(pids or [])))
+             time.time(), json.dumps(pids or []), port))
         conn.commit()
 
     def update_sandbox_pids(self, name: str, pids: list):

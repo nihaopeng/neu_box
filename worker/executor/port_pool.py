@@ -1,8 +1,11 @@
+import logging
 import os
 import socket
 import threading
 from typing import Optional
 import psutil
+
+logger = logging.getLogger(__name__)
 
 
 class Port_Pool_Manager:
@@ -50,7 +53,7 @@ class Port_Pool_Manager:
                 try:
                     if child.status() == psutil.STATUS_ZOMBIE:
                         os.waitpid(child.pid, os.WNOHANG)
-                        print(f"[PortPool] 已收尸僵尸子进程 PID={child.pid}")
+                        logger.debug("已收尸僵尸子进程 PID=%s", child.pid)
                 except (psutil.NoSuchProcess, ProcessLookupError, OSError):
                     pass
         except Exception:
@@ -69,7 +72,7 @@ class Port_Pool_Manager:
                     continue
 
             # 池子空了，先尝试收尸再重新校准
-            print("[PortPool] 端口池告急！触发【收尸 + 端口同步】...")
+            logger.warning("端口池告急！触发【收尸 + 端口同步】...")
             self._reap_zombie_children()
             self._sync_reclaim_and_reap_zombies_with_lock()
 
@@ -89,7 +92,7 @@ class Port_Pool_Manager:
         核心实现：在端口池内部，通过对系统级网络流和进程状态的综合审计，
         找出可回收的端口并清理僵尸进程。
         """
-        print("[PortPool] 开始执行系统级网络与进程交叉审计...")
+        logger.debug("开始执行系统级网络与进程交叉审计...")
 
         active_system_ports = set()
 
@@ -108,10 +111,10 @@ class Port_Pool_Manager:
                         proc = psutil.Process(conn.pid)
 
                         if proc.status() == psutil.STATUS_ZOMBIE:
-                            print(f"  -> [内核捕获] 发现端口 {port} 被僵尸进程(PID: {conn.pid})霸占！")
+                            logger.debug("发现端口 %s 被僵尸进程(PID: %s)霸占", port, conn.pid)
                             try:
                                 proc.wait(timeout=0.1)
-                                print(f"  -> [内核捕获] 僵尸进程 {conn.pid} 已成功火化。")
+                                logger.debug("僵尸进程 %s 已成功火化", conn.pid)
                             except (psutil.NoSuchProcess, psutil.TimeoutExpired, OSError):
                                 pass
                             continue
@@ -126,7 +129,7 @@ class Port_Pool_Manager:
                 # 交给下面的 _is_port_actually_free() 物理检测来裁决
 
         except Exception as e:
-            print(f"[PortPool] 审计系统连接失败: {e}")
+            logger.error("审计系统连接失败: %s", e)
             return
 
         # 2. 重新对齐、重建可用端口池
@@ -136,12 +139,10 @@ class Port_Pool_Manager:
                 if self._is_port_actually_free(port):
                     new_available.add(port)
                 else:
-                    print(f"  -> 提示: 端口 {port} 网络未登记，但物理绑定失败"
-                          f"（可能正处于 TIME_WAIT 释放中）。")
+                    logger.debug("端口 %s 网络未登记，但物理绑定失败（可能正处于 TIME_WAIT 释放中）", port)
 
         self.available_ports = new_available
-        print(f"[PortPool] 智能审计完成！当前真正空闲可分配的端口数:"
-              f" {len(self.available_ports)}")
+        logger.info("智能审计完成！当前真正空闲可分配的端口数: %s", len(self.available_ports))
 
     def force_sync_and_reclaim(self):
         """外部公开接口：允许手动或定时器调用"""

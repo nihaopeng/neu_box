@@ -10,14 +10,20 @@
 """
 
 import json
+import logging
 import os
+import signal
 import stat
 import subprocess
 import threading
 import time
 from typing import Optional, List
 
+import psutil
+
 from executor.db import Database
+
+logger = logging.getLogger(__name__)
 
 
 # ==================================================================
@@ -116,10 +122,10 @@ class SbxManager:
         """重启后核对 DB 与 cgroup 实际状态，清理已不存在的沙盒记录。"""
         for name in self._list_sandbox_names():
             if not os.path.isdir(self._cg_path(name)):
-                print(f"[SbxManager] 恢复: 沙盒 '{name}' 的 cgroup 已不存在，清理 DB 记录")
+                logger.warning("恢复: 沙盒 '%s' 的 cgroup 已不存在，清理 DB 记录", name)
                 self.db.delete_sandbox(name)
             else:
-                print(f"[SbxManager] 恢复: 沙盒 '{name}' 仍存活")
+                logger.info("恢复: 沙盒 '%s' 仍存活", name)
 
     # ── 设备空闲校验 ─────────────────────────────────────────────
 
@@ -144,16 +150,19 @@ class SbxManager:
 
         idle = info.get('idle', 0)
         if idle < needed:
-            print(f"[SbxManager] 设备不足: 需要 {needed} 个, 系统空闲 {idle} 个 (major={self.device_major})")
+            logger.warning("设备不足: 需要 %s 个, 系统空闲 %s 个 (major=%s)",
+                           needed, idle, self.device_major)
             return False
 
-        print(f"[SbxManager] 设备校验通过: 需要 {needed} 个, 系统空闲 {idle} 个 (major={self.device_major})")
+        logger.debug("设备校验通过: 需要 %s 个, 系统空闲 %s 个 (major=%s)",
+                     needed, idle, self.device_major)
         return True
 
     # ── 核心操作 ─────────────────────────────────────────────────
 
     def create_sandbox(self, name: str, cpu: int = 0, mem: str = "0",
-                       devices: Optional[List[str]] = None) -> bool:
+                       devices: Optional[List[str]] = None,
+                       port: int = None) -> bool:
         """创建沙盒。
 
         Args:
@@ -170,7 +179,7 @@ class SbxManager:
             if os.path.isdir(self._cg_path(name)):
                 existing = self.db.get_sandbox(name)
                 if existing:
-                    print(f"[SbxManager] 沙盒 '{name}' 已存在，跳过创建")
+                    logger.info("沙盒 '%s' 已存在，跳过创建", name)
                     return True
 
             # 构建命令行
@@ -178,10 +187,10 @@ class SbxManager:
             if devices:
                 args.extend(devices)
 
-            print(f"[SbxManager] 创建沙盒 '{name}' (cpu={cpu}, mem={mem}, devices={devices})")
+            logger.info("创建沙盒 '%s' (cpu=%s, mem=%s, devices=%s)", name, cpu, mem, devices)
             result = self._run_script(*args)
             if result.returncode != 0:
-                print(f"[SbxManager] 创建沙盒 '{name}' 失败: {result.stderr.strip()}")
+                logger.error("创建沙盒 '%s' 失败: %s", name, result.stderr.strip())
                 return False
 
             # 写入 DB
@@ -189,8 +198,8 @@ class SbxManager:
                 name=name, cpu=cpu, mem=mem,
                 devices=devices or [],
                 cgroup_path=self._cg_path(name),
-                pids=[])
-            print(f"[SbxManager] ✓ 沙盒 '{name}' 创建成功")
+                pids=[], port=port)
+            logger.info("✓ 沙盒 '%s' 创建成功", name)
             return True
 
     def join_sandbox(self, name: str, pid: int) -> bool:
@@ -202,12 +211,12 @@ class SbxManager:
         with self._lock:
             record = self.db.get_sandbox(name)
             if not record:
-                print(f"[SbxManager] 加入失败: 沙盒 '{name}' 不在 DB 中")
+                logger.error("加入失败: 沙盒 '%s' 不在 DB 中", name)
                 return False
 
             result = self._run_script('join', name, str(pid))
             if result.returncode != 0:
-                print(f"[SbxManager] 加入 PID {pid} 到 '{name}' 失败: {result.stderr.strip()}")
+                logger.error("加入 PID %s 到 '%s' 失败: %s", pid, name, result.stderr.strip())
                 return False
 
             # 更新 DB
@@ -217,7 +226,7 @@ class SbxManager:
                 record['pids'] = pids
                 self.db.update_sandbox_pids(name, pids)
 
-            print(f"[SbxManager] ✓ PID {pid} 已加入沙盒 '{name}'")
+            logger.info("✓ PID %s 已加入沙盒 '%s'", pid, name)
             return True
 
     def destroy_sandbox(self, name: str) -> bool:
@@ -233,14 +242,14 @@ class SbxManager:
 
             result = self._run_script('destroy', name)
             if result.returncode != 0:
-                print(f"[SbxManager] 销毁沙盒 '{name}' 失败: {result.stderr.strip()}")
+                logger.error("销毁沙盒 '%s' 失败: %s", name, result.stderr.strip())
                 # 如果 cgroup 确实没了，至少清理 DB
                 if not os.path.isdir(self._cg_path(name)):
                     self.db.delete_sandbox(name)
                 return False
 
             self.db.delete_sandbox(name)
-            print(f"[SbxManager] ✓ 沙盒 '{name}' 已销毁")
+            logger.info("✓ 沙盒 '%s' 已销毁", name)
             return True
 
     def sandbox_status(self, name: str) -> Optional[dict]:
@@ -260,7 +269,8 @@ class SbxManager:
 
     def allocate_for_terminal(self, terminal_id: str,
                               cpu: int = 0, mem: str = "0",
-                              device_num: int = 0) -> Optional[dict]:
+                              device_num: int = 0,
+                              port: int = None) -> Optional[dict]:
         """为终端会话分配沙盒。
 
         根据 device_num 从空闲设备池中分配指定数量的设备节点，
@@ -286,18 +296,19 @@ class SbxManager:
             # 2. 从 DB 计算实际空闲设备
             free = self._get_free_devices()
             if len(free) < device_num:
-                print(f"[SbxManager] 设备不足: 需要 {device_num} 个, DB 空闲 {len(free)} 个 "
-                      f"(free={free})")
+                logger.warning("设备不足: 需要 %s 个, DB 空闲 %s 个 (free=%s)",
+                               device_num, len(free), free)
                 return None
 
             devices = free[:device_num]
-            print(f"[SbxManager] 分配设备: {devices} (从空闲池 {free} 中选取 {device_num} 个)")
+            logger.info("分配设备: %s (从空闲池 %s 中选取 %s 个)", devices, free, device_num)
 
         success = self.create_sandbox(
             sandbox_name,
             cpu=cpu,
             mem=mem,
             devices=devices if devices else None,
+            port=port,
         )
         if not success:
             return None
@@ -306,14 +317,38 @@ class SbxManager:
 
     # ── 孤儿清理 ─────────────────────────────────────────────────
 
+    @staticmethod
+    def _get_active_ports() -> set:
+        """扫描系统所有 ESTABLISHED 状态的 TCP 端口，返回活跃端口集合。
+
+        一次扫描，供后续多个沙盒复用，避免重复调用 psutil.net_connections()。
+        """
+        active = set()
+        try:
+            for conn in psutil.net_connections(kind='tcp'):
+                if conn.laddr and conn.status == 'ESTABLISHED':
+                    active.add(conn.laddr.port)
+        except Exception:
+            pass
+        return active
+
     def cleanup_orphaned(self) -> int:
         """清理所有进程已退出的沙盒，释放设备资源。
+        对于 term_* 沙盒，增加终端超时未连接检查：若进程存活但端口无
+        ESTABLISHED 连接且超过 terminal_idle_timeout 秒，则强制杀进程并清理。
 
         Returns:
             清理的沙盒数量。
         """
+        from executor.port_pool import Port_Pool_Manager
+
+        logger.debug("正在扫描活跃端口...")
+        active_ports = self._get_active_ports()  # 一次扫描，所有 term_* 沙盒复用
+        logger.debug("扫描完成，活跃端口: %s", active_ports)
         cleaned = 0
-        for name in self._list_sandbox_names():
+        sandbox_names = self._list_sandbox_names()
+        logger.debug("共 %s 个沙盒待检查", len(sandbox_names))
+        for name in sandbox_names:
             record = self.db.get_sandbox(name)
             if not record:
                 continue
@@ -326,11 +361,17 @@ class SbxManager:
                     with open(procs_file) as f:
                         content = f.read().strip()
                     if not content:
-                        print(f"[SbxManager] 清理空沙盒 '{name}' (无进程)")
+                        logger.info("清理空沙盒 '%s' (无进程)", name)
+                        port = record.get('port')
+                        if port:
+                            Port_Pool_Manager.get_Port_Pool_Manager().release_port(port)
                         self.destroy_sandbox(name)
                         cleaned += 1
                 except (OSError, IOError):
                     # cgroup 目录可能已不存在
+                    port = record.get('port')
+                    if port:
+                        Port_Pool_Manager.get_Port_Pool_Manager().release_port(port)
                     self.db.delete_sandbox(name)
                     cleaned += 1
                 continue
@@ -346,9 +387,32 @@ class SbxManager:
                     pass
 
             if all_dead:
-                print(f"[SbxManager] 清理孤儿沙盒 '{name}' (所有 PID 已退出)")
+                logger.info("清理孤儿沙盒 '%s' (所有 PID 已退出)", name)
+                port = record.get('port')
+                if port:
+                    Port_Pool_Manager.get_Port_Pool_Manager().release_port(port)
                 self.destroy_sandbox(name)
                 cleaned += 1
+            elif name.startswith('term_'):
+                # 终端沙盒：进程还活着但端口无 ESTABLISHED 连接 → 无人使用，直接清理
+                port = record.get('port')
+                if port and port not in active_ports:
+                    logger.info("终端沙盒 '%s' 端口 %s 无活跃连接，清理", name, port)
+                    for pid in pids:
+                        try:
+                            os.kill(pid, signal.SIGTERM)
+                        except OSError:
+                            pass
+                    # 等待进程优雅退出
+                    time.sleep(0.3)
+                    for pid in pids:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                    Port_Pool_Manager.get_Port_Pool_Manager().release_port(port)
+                    self.destroy_sandbox(name)
+                    cleaned += 1
 
         return cleaned
 
@@ -358,17 +422,25 @@ class SbxManager:
     def _reaper_loop(self):
         """后台收尸线程主循环。每隔 sandbox_reaper_interval 秒执行一次收尸。"""
         interval = int(os.getenv('sandbox_reaper_interval', '30'))
-        print(f"[SbxReaper] 定时收尸已启动 (间隔={interval}s)")
+        logger.info("定时收尸已启动 (间隔=%ss)", interval)
 
         while True:
             try:
-                time.sleep(interval)
+                t0 = time.monotonic()
+                logger.debug("开始收尸扫描...")
                 cleaned = self.cleanup_orphaned()
+                remaining = len(self._list_sandbox_names())
                 if cleaned > 0:
-                    print(f"[SbxReaper] 本轮收尸完成: 清理={cleaned}, "
-                          f"剩余沙盒={len(self._list_sandbox_names())}")
+                    logger.info("本轮收尸完成: 清理=%s, 剩余沙盒=%s", cleaned, remaining)
+                else:
+                    logger.debug("本轮收尸完成: 清理=%s, 剩余沙盒=%s", cleaned, remaining)
+                # 用实际耗时修正 sleep，保证间隔稳定
+                elapsed = time.monotonic() - t0
+                sleep_time = max(0, interval - elapsed)
+                time.sleep(sleep_time)
             except Exception as e:
-                print(f"[SbxReaper] 收尸异常: {e}")
+                logger.error("收尸异常: %s", e, exc_info=True)
+                time.sleep(interval)
 
     def start_reaper(self):
         """启动后台收尸线程（daemon 线程，随主进程退出）。"""

@@ -1,9 +1,12 @@
+import logging
 import os
 import threading
 import time
 import uuid
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class Nodes:
@@ -107,12 +110,12 @@ class Nodes_Pool:
                 node_id = str(uuid.uuid4())
                 node = Nodes(node_id, name, host, port)
                 new_nodes[node_id] = node
-                print(f'[Nodes_Pool] 新增节点 {node_id} ({name} @ {host}:{port})')
+                logger.info('新增节点 %s (%s @ %s:%s)', node_id, name, host, port)
 
         # 移除不再存在于 config 中的节点
         for node_id in list(self.nodes.keys()):
             if node_id not in new_nodes:
-                print(f'[Nodes_Pool] 移除节点 {node_id}')
+                logger.info('移除节点 %s', node_id)
         self.nodes = new_nodes
 
     # ── CRUD ───────────────────────────────────────────────────
@@ -204,7 +207,7 @@ class Nodes_Pool:
             name='node-status-poller',
         )
         Nodes_Pool._poll_thread.start()
-        print(f'[Nodes_Pool] 后台轮询已启动，每 {interval}s 查询所有节点状态')
+        logger.info('后台轮询已启动，每 %ss 查询所有节点状态', interval)
 
     def stop_polling(self):
         """停止后台轮询。"""
@@ -214,8 +217,12 @@ class Nodes_Pool:
 
     def _poll_loop(self):
         while Nodes_Pool._polling:
+            t0 = time.monotonic()
             self._poll_all_nodes()
-            time.sleep(Nodes_Pool._poll_interval)
+            # 用实际耗时修正 sleep，保证轮询间隔稳定
+            elapsed = time.monotonic() - t0
+            sleep_time = max(0, Nodes_Pool._poll_interval - elapsed)
+            time.sleep(sleep_time)
 
     def _poll_all_nodes(self):
         """向所有节点请求 /status 并更新本地记录。每次先同步 config.json 中的节点列表。"""
@@ -256,7 +263,7 @@ class Nodes_Pool:
             json=req,
             timeout=timeout,
         )
-        print(f'[Nodes_Pool] 转发 → {node_id} {endpoint} 状态 {resp.status_code}')
+        logger.debug('转发 → %s %s 状态 %s', node_id, endpoint, resp.status_code)
         return resp
 
     def forward_get_to_node(self, node_id: str, endpoint: str,
@@ -280,7 +287,7 @@ class Nodes_Pool:
             params=params,
             timeout=timeout,
         )
-        print(f'[Nodes_Pool] GET → {node_id} {endpoint} 状态 {resp.status_code}')
+        logger.debug('GET → %s %s 状态 %s', node_id, endpoint, resp.status_code)
         return resp
 
     # ── 向指定节点转发终端创建请求（兼容旧接口）────────────────

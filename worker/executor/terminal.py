@@ -1,3 +1,4 @@
+import logging
 import os
 import platform
 import pwd
@@ -8,6 +9,7 @@ from flask import Blueprint, request
 from executor.port_pool import Port_Pool_Manager
 from executor.sbx_manager import SbxManager
 
+logger = logging.getLogger(__name__)
 terminal_bp = Blueprint('terminal', __name__)
 
 
@@ -24,10 +26,10 @@ def _resolve_ttyd_binary():
     if filename:
         path = os.path.join(deps_dir, filename)
         if os.path.isfile(path):
-            print(f'[TTYD] 使用内嵌二进制: {path}')
+            logger.info('使用内嵌二进制: %s', path)
             return path
     # 架构未知或文件缺失，回退到系统 PATH
-    print(f'[TTYD] 未找到匹配的架构 ({machine})，回退到系统 ttyd')
+    logger.warning('未找到匹配的架构 (%s)，回退到系统 ttyd', machine)
     return 'ttyd'
 
 
@@ -98,6 +100,7 @@ def create():
             cpu=sandbox_cpu,
             mem=sandbox_mem,
             device_num=device_num,
+            port=port,
         )
         if result is None:
             # 沙盒创建失败 → 清理 ttyd 并归还端口

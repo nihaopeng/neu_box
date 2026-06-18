@@ -1,0 +1,111 @@
+[Worker] 日志级别: 40
+ * Serving Flask app 'main'
+ * Debug mode: off
+ * Serving Flask app 'main'
+ * Debug mode: off
+ * Serving Flask app 'main'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:59075
+ * Running on http://202.199.13.164:59075
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [18/Jun/2026 13:33:11] "GET /status HTTP/1.1" 200 -
+127.0.0.1 - - [18/Jun/2026 13:33:21] "GET /status HTTP/1.1" 200 -
+127.0.0.1 - - [18/Jun/2026 13:33:28] "GET /status HTTP/1.1" 200 -
+127.0.0.1 - - [18/Jun/2026 13:33:45] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:33:48 [worker] INFO Worker 启动，日志级别=INFO，日志文件=/home/pengyt/projects/neu_box/worker/logs/worker-20260618-133348.log
+2026-06-18 13:33:48 [executor.terminal] INFO 使用内嵌二进制: /home/pengyt/projects/neu_box/worker/deps/ttyd.aarch64
+2026-06-18 13:33:48 [executor.command] INFO 后台消费线程已启动
+2026-06-18 13:33:48 [executor.sbx_manager] INFO 定时收尸已启动 (间隔=30s)
+ * Serving Flask app 'main'
+ * Debug mode: off
+2026-06-18 13:33:48 [werkzeug] INFO [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:59075
+ * Running on http://202.199.13.164:59075
+2026-06-18 13:33:48 [werkzeug] INFO [33mPress CTRL+C to quit[0m
+2026-06-18 13:34:02 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:34:02] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:34:18 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:34:18] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:34:22 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:34:22] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:34:35 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:34:35] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:34:52 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:34:52] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:35:09 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:35:09] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:35:23 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:35:23] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:35:25 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:35:25] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:35:42 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:35:42] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:35:59 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:35:59] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:36:15 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:36:15] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:36:24 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:36:24] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:36:32 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:36:32] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:36:49 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:36:49] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:37:06 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:37:06] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:37:22 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:37:22] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:37:25 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:37:25] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:37:39 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:37:39] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:37:56 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:37:56] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:38:12 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:38:12] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:38:26 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:38:26] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:38:29 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:38:29] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:38:46 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:38:46] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:39:03 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:39:03] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:39:19 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:39:19] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:39:27 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:39:27] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:39:36 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:39:36] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:39:53 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:39:53] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:40:09 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:40:09] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:40:26 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:40:26] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:40:28 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:40:28] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:40:43 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:40:43] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:41:00 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:41:00] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:41:16 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:41:16] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:41:29 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:41:29] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:41:33 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:41:33] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:41:50 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:41:50] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:42:06 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:42:06] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:42:23 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:42:23] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:42:30 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:42:30] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:42:40 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:42:40] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:42:56 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:42:56] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:43:13 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:43:13] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:43:30 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:43:30] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:43:31 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:43:31] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:43:47 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:43:47] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:44:03 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:44:03] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:44:20 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:44:20] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:44:32 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:44:32] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:44:37 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:44:37] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:44:54 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:44:54] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:45:11 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:45:11] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:45:27 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:45:27] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:45:33 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:45:33] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:45:44 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:45:44] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:46:01 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:46:01] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:46:18 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:46:18] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:46:34 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:46:34] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:46:34 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:46:34] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:46:51 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:46:51] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:47:08 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:47:08] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:47:25 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:47:25] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:47:35 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:47:35] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:47:41 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:47:41] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:47:58 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:47:58] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:48:15 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:48:15] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:48:31 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:48:31] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:48:36 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:48:36] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:48:48 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:48:48] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:49:05 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:49:05] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:49:21 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:49:21] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:49:37 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:49:37] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:49:38 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:49:38] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:49:55 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:49:55] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:50:12 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:50:12] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:50:28 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:50:28] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:50:38 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:50:38] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:50:45 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:50:45] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:51:02 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:51:02] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:51:14 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:51:14] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:51:16 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:51:16] "GET /command/queue HTTP/1.1" 200 -
+2026-06-18 13:51:19 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:51:19] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:51:35 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:51:35] "GET /status HTTP/1.1" 200 -
+2026-06-18 13:51:47 [werkzeug] INFO 127.0.0.1 - - [18/Jun/2026 13:51:47] "GET /status HTTP/1.1" 200 -

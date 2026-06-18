@@ -9,6 +9,7 @@ API:
   GET  /command/result/<id>   查看自己的任务结果（含日志，需 user_id 匹配）
 """
 
+import logging
 import os
 import pwd
 import signal
@@ -22,6 +23,7 @@ from flask import Blueprint, request
 
 from executor.sbx_manager import SbxManager
 
+logger = logging.getLogger(__name__)
 command_bp = Blueprint('command', __name__)
 
 DEFAULT_TIMEOUT = int(os.getenv('command_timeout', '300'))
@@ -80,7 +82,7 @@ def execute_in_sandbox(
     ok = sbx.create_sandbox(sandbox_name, cpu=cpu, mem=mem,
                             devices=devices if devices else None)
     if not ok:
-        print(f"[execute_in_sandbox] 沙盒 '{sandbox_name}' 创建失败")
+        logger.error("沙盒 '%s' 创建失败", sandbox_name)
         return {
             'returncode': -1, 'stdout': '', 'stderr': f'Failed to create sandbox "{sandbox_name}"',
             'timed_out': False, 'error': 'sandbox_create_failed',
@@ -118,30 +120,30 @@ def execute_in_sandbox(
                 f.write(str(os.getpid()))
 
     try:
-        print(f"[execute_in_sandbox] 启动进程, cgroup={cg_procs}, user={username or '(root)'}")
+        logger.debug("启动进程, cgroup=%s, user=%s", cg_procs, username or '(root)')
         proc = subprocess.Popen(
             ['bash', '-c', command],
             preexec_fn=preexec,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        print(f"[execute_in_sandbox] 子进程 PID={proc.pid} 已启动")
+        logger.debug("子进程 PID=%s 已启动", proc.pid)
 
         # 3. 更新 DB 记录（join_sandbox 也会写 cgroup.procs，幂等）
         time.sleep(0.05)
         try:
             sbx.join_sandbox(sandbox_name, proc.pid)
         except Exception as e:
-            print(f"[execute_in_sandbox] join_sandbox 跳过 (进程可能已退出): {e}")
+            logger.warning("join_sandbox 跳过 (进程可能已退出): %s", e)
 
         # 4. 等待命令执行完成
-        print(f"[execute_in_sandbox] 等待 PID={proc.pid} 完成 (timeout={timeout}s)")
+        logger.debug("等待 PID=%s 完成 (timeout=%ss)", proc.pid, timeout)
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
             timed_out = False
         except subprocess.TimeoutExpired:
             timed_out = True
-            print(f"[execute_in_sandbox] PID={proc.pid} 超时，正在终止...")
+            logger.warning("PID=%s 超时，正在终止...", proc.pid)
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
                 proc.wait(timeout=5)
@@ -153,7 +155,7 @@ def execute_in_sandbox(
                     pass
             stdout, stderr = proc.communicate()
 
-        print(f"[execute_in_sandbox] PID={proc.pid} 完成, rc={proc.returncode}")
+        logger.info("PID=%s 完成, rc=%s", proc.pid, proc.returncode)
         return {
             'returncode': proc.returncode if not timed_out else -1,
             'stdout': stdout.decode('utf-8', errors='replace'),
@@ -163,9 +165,7 @@ def execute_in_sandbox(
         }
 
     except Exception as e:
-        print(f"[execute_in_sandbox] 异常: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("异常: %s: %s", type(e).__name__, e, exc_info=True)
         if proc is not None:
             try:
                 proc.kill()
@@ -177,11 +177,11 @@ def execute_in_sandbox(
             'timed_out': False, 'error': 'exception',
         }
     finally:
-        print(f"[execute_in_sandbox] 清理沙盒 '{sandbox_name}'")
+        logger.debug("清理沙盒 '%s'", sandbox_name)
         try:
             sbx.destroy_sandbox(sandbox_name)
         except Exception as e:
-            print(f"[execute_in_sandbox] 清理沙盒异常: {e}")
+            logger.error("清理沙盒异常: %s", e)
 
 
 # ==================================================================
@@ -233,21 +233,21 @@ class TaskQueue:
         self._worker_thread = threading.Thread(
             target=self._consume_loop, daemon=True, name='task-queue-consumer')
         self._worker_thread.start()
-        print('[TaskQueue] 后台消费线程已启动')
+        logger.info('后台消费线程已启动')
 
     def _recover_orphaned(self):
         """启动恢复：将上次异常退出的任务复原。"""
         all_active = self._db.get_queue_tasks()
         for task in all_active:
             if task['status'] == 'running':
-                print(f'[TaskQueue] 恢复: 标记孤儿任务 {task["task_id"]} 为 failed')
+                logger.warning('恢复: 标记孤儿任务 %s 为 failed', task['task_id'])
                 self._db.update_task_result(
                     task['task_id'], 'failed', -1, '', '',
                     error='Worker 可能在执行过程中重启')
             elif task['status'] == 'queued':
                 # 重新加入内存队列（按原 position 排序）
-                print(f'[TaskQueue] 恢复: 重新入队 {task["task_id"]} '
-                      f'(原 position={task.get("position")})')
+                logger.info('恢复: 重新入队 %s (原 position=%s)',
+                            task['task_id'], task.get('position'))
                 self._pending[task['task_id']] = {
                     'task_id': task['task_id'],
                     'user_id': task['user_id'],
@@ -265,7 +265,7 @@ class TaskQueue:
         # 重新排位
         if self._pending:
             self._reindex()
-            print(f'[TaskQueue] 恢复完成: {len(self._pending)} 个任务重新入队')
+            logger.info('恢复完成: %s 个任务重新入队', len(self._pending))
 
     # ── 提交 ──────────────────────────────────────────────────
 
@@ -301,7 +301,7 @@ class TaskQueue:
             self._reindex()
             self._cv.notify()
 
-        print(f'[TaskQueue] 任务入队: {task_id} user={user_id} cmd={command[:60]}...')
+        logger.info('任务入队: %s user=%s cmd=%s...', task_id, user_id, command[:60])
         return task_id
 
     # ── 查询 ──────────────────────────────────────────────────
@@ -397,8 +397,8 @@ class TaskQueue:
                 task['task_id'], 'running', started_at=task['started_at'])
 
             # 在锁外执行
-            print(f'[TaskQueue] 开始执行: {task["task_id"]} '
-                  f'user={task["user_id"]} cmd={task["command"][:60]}')
+            logger.info('开始执行: %s user=%s cmd=%s...',
+                        task['task_id'], task['user_id'], task['command'][:60])
 
             sandbox_name = f"cmd_{task['task_id']}"
             result = execute_in_sandbox(
@@ -435,8 +435,8 @@ class TaskQueue:
                 task['status'] = status
                 self._running = None
 
-            print(f'[TaskQueue] 完成: {task["task_id"]} status={status} '
-                  f'rc={result.get("returncode")}')
+            logger.info('完成: %s status=%s rc=%s',
+                        task['task_id'], status, result.get('returncode'))
 
 
 # ==================================================================
