@@ -104,3 +104,33 @@ TaskQueue 后台消费线程:
 
 GET /command/result/<task_id>?user_id=...&password=...  → 返回日志（需密码校验）
 ```
+
+### 终端沙盒模式
+
+将当前 shell 加入独占设备的 cgroup 沙盒。Worker 通过 `/proc/<pid>/status` 校验 PID 归属，无需密码。
+
+```bash
+# 安装（全局生效）
+sudo cp worker/scripts/client/neu-sbox.sh /etc/profile.d/
+source /etc/profile.d/neu-sbox.sh
+
+# 使用
+neu-sbox acquire 1              # 申请 1 个 NPU，当前终端立即隔离
+neu-sbox acquire 2 4 8          # 申请 2 NPU + 4 核 CPU + 8G 内存
+neu-sbox status                 # 查看当前 shell 是否在沙盒中
+neu-sbox list                   # 列出我的沙盒
+neu-sbox release <name>         # 释放沙盒
+```
+
+```bash
+# 远程 Worker
+export NEU_BOX_URL=http://<worker_ip>:59075
+neu-sbox acquire 1
+```
+
+```
+POST /sandbox/acquire {username, pid, device_num}
+  → /proc/<pid>/status 校验 → cgroup 沙盒 + 设备分配 → shell PID 加入
+POST /sandbox/release {sandbox_name}
+  → destroy_sandbox() → 设备归还
+```

@@ -98,6 +98,14 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function formatTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ` +
+         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Toast
 // ═══════════════════════════════════════════════════════════════
@@ -113,29 +121,24 @@ function showToast(msg, type) {
 // Mode switching
 // ═══════════════════════════════════════════════════════════════
 
-modeToggle.addEventListener('click', (e) => {
-  const btn = e.target.closest('button');
-  if (!btn) return;
-  const mode = btn.dataset.mode;
+function switchMode(mode) {
   if (mode === state.mode) return;
-
-  modeToggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
   state.mode = mode;
 
-  // Show/hide form fields
+  modeToggle.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+
   if (mode === 'terminal') {
     terminalFields.style.display = '';
     commandFields.style.display = 'none';
     submitBtn.textContent = '申请终端';
-    // Show terminal, hide log viewer
     rightPanel.classList.add('mode-terminal');
     rightPanel.classList.remove('mode-command');
   } else {
     terminalFields.style.display = 'none';
     commandFields.style.display = '';
     submitBtn.textContent = '提交命令';
-    // Show log viewer, hide terminal
     rightPanel.classList.add('mode-command');
     rightPanel.classList.remove('mode-terminal');
     // Reset log viewer to placeholder
@@ -146,6 +149,12 @@ modeToggle.addEventListener('click', (e) => {
 
   updateSubmitBtn();
   resultDiv.style.display = 'none';
+}
+
+modeToggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  switchMode(btn.dataset.mode);
 });
 
 // Init mode classes
@@ -528,6 +537,12 @@ queueRefreshBtn.addEventListener('click', () => {
 
 async function viewTaskLog(taskId) {
   if (!state.selectedNodeId || !state.cmdUserId) return;
+
+  // 自动切换到命令模式
+  if (state.mode !== 'command') {
+    switchMode('command');
+  }
+
   const password = cmdPasswordEl.value;
   if (!password) {
     logPlaceholder.style.display = 'none';
@@ -565,6 +580,12 @@ async function viewTaskLog(taskId) {
     html += `<strong>任务ID:</strong> ${escapeHtml(task.task_id)}<br>`;
     html += `<strong>用户:</strong> ${escapeHtml(task.user_id)}<br>`;
     html += `<strong>命令:</strong> ${escapeHtml(task.command)}<br>`;
+    html += `<strong>资源:</strong> CPU=${task.cpu || 0}, 内存=${task.mem || '0'}, 设备=${task.device_num || 0}`;
+    if (task.devices && task.devices.length > 0) {
+      html += ` (${escapeHtml(task.devices.join(', '))})`;
+    }
+    html += `<br>`;
+    html += `<strong>创建时间:</strong> ${formatTime(task.created_at)}<br>`;
     html += `<strong>状态:</strong> ${statusLabel(task.status)}`;
     if (task.result) {
       html += ` | <strong>返回码:</strong> ${task.result.returncode}`;
