@@ -179,7 +179,7 @@ class SbxManager:
             if os.path.isdir(self._cg_path(name)):
                 existing = self.db.get_sandbox(name)
                 if existing:
-                    logger.info("沙盒 '%s' 已存在，跳过创建", name)
+                    logger.warning("沙盒 '%s' 已存在，跳过创建", name)
                     return True
 
             # 构建命令行
@@ -187,7 +187,7 @@ class SbxManager:
             if devices:
                 args.extend(devices)
 
-            logger.info("创建沙盒 '%s' (cpu=%s, mem=%s, devices=%s)", name, cpu, mem, devices)
+            logger.warning("创建沙盒 '%s' (cpu=%s, mem=%s, devices=%s)", name, cpu, mem, devices)
             result = self._run_script(*args)
             if result.returncode != 0:
                 logger.error("创建沙盒 '%s' 失败: %s", name, result.stderr.strip())
@@ -199,7 +199,7 @@ class SbxManager:
                 devices=devices or [],
                 cgroup_path=self._cg_path(name),
                 pids=[], port=port)
-            logger.info("✓ 沙盒 '%s' 创建成功", name)
+            logger.warning("✓ 沙盒 '%s' 创建成功", name)
             return True
 
     def join_sandbox(self, name: str, pid: int) -> bool:
@@ -226,7 +226,7 @@ class SbxManager:
                 record['pids'] = pids
                 self.db.update_sandbox_pids(name, pids)
 
-            logger.info("✓ PID %s 已加入沙盒 '%s'", pid, name)
+            logger.warning("✓ PID %s 已加入沙盒 '%s'", pid, name)
             return True
 
     def destroy_sandbox(self, name: str) -> bool:
@@ -249,7 +249,7 @@ class SbxManager:
                 return False
 
             self.db.delete_sandbox(name)
-            logger.info("✓ 沙盒 '%s' 已销毁", name)
+            logger.warning("✓ 沙盒 '%s' 已销毁", name)
             return True
 
     def sandbox_status(self, name: str) -> Optional[dict]:
@@ -301,7 +301,7 @@ class SbxManager:
                 return None
 
             devices = free[:device_num]
-            logger.info("分配设备: %s (从空闲池 %s 中选取 %s 个)", devices, free, device_num)
+            logger.warning("分配设备: %s (从空闲池 %s 中选取 %s 个)", devices, free, device_num)
 
         success = self.create_sandbox(
             sandbox_name,
@@ -361,7 +361,7 @@ class SbxManager:
                     with open(procs_file) as f:
                         content = f.read().strip()
                     if not content:
-                        logger.info("清理空沙盒 '%s' (无进程)", name)
+                        logger.warning("清理空沙盒 '%s' (无进程)", name)
                         port = record.get('port')
                         if port:
                             Port_Pool_Manager.get_Port_Pool_Manager().release_port(port)
@@ -387,7 +387,7 @@ class SbxManager:
                     pass
 
             if all_dead:
-                logger.info("清理孤儿沙盒 '%s' (所有 PID 已退出)", name)
+                logger.warning("清理孤儿沙盒 '%s' (所有 PID 已退出)", name)
                 port = record.get('port')
                 if port:
                     Port_Pool_Manager.get_Port_Pool_Manager().release_port(port)
@@ -397,7 +397,7 @@ class SbxManager:
                 # 终端沙盒：进程还活着但端口无 ESTABLISHED 连接 → 无人使用，直接清理
                 port = record.get('port')
                 if port and port not in active_ports:
-                    logger.info("终端沙盒 '%s' 端口 %s 无活跃连接，清理", name, port)
+                    logger.warning("终端沙盒 '%s' 端口 %s 无活跃连接，清理", name, port)
                     for pid in pids:
                         try:
                             os.kill(pid, signal.SIGTERM)
@@ -422,7 +422,7 @@ class SbxManager:
     def _reaper_loop(self):
         """后台收尸线程主循环。每隔 sandbox_reaper_interval 秒执行一次收尸。"""
         interval = int(os.getenv('sandbox_reaper_interval', '30'))
-        logger.info("定时收尸已启动 (间隔=%ss)", interval)
+        logger.warning("定时收尸已启动 (间隔=%ss)", interval)
 
         while True:
             try:
@@ -431,7 +431,7 @@ class SbxManager:
                 cleaned = self.cleanup_orphaned()
                 remaining = len(self._list_sandbox_names())
                 if cleaned > 0:
-                    logger.info("本轮收尸完成: 清理=%s, 剩余沙盒=%s", cleaned, remaining)
+                    logger.warning("本轮收尸完成: 清理=%s, 剩余沙盒=%s", cleaned, remaining)
                 else:
                     logger.debug("本轮收尸完成: 清理=%s, 剩余沙盒=%s", cleaned, remaining)
                 # 用实际耗时修正 sleep，保证间隔稳定
