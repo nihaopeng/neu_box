@@ -254,7 +254,8 @@ class TaskQueue:
                     'command': task['command'],
                     'cpu': task.get('cpu', 0),
                     'mem': task.get('mem', '0'),
-                    'devices': task.get('devices', []),
+                    'device_num': len(task.get('devices') or []),
+                    'devices': [],
                     'status': 'queued',
                     'position': 0,
                     'created_at': task.get('created_at', time.time()),
@@ -271,15 +272,15 @@ class TaskQueue:
 
     def submit(self, user_id: str, command: str,
                cpu: int = 0, mem: str = "0",
-               devices: list = None, password: str = '') -> str:
-        """提交任务到队列，返回 task_id。user_id 即系统用户名。"""
+               device_num: int = 0, password: str = '') -> str:
+        """提交任务到队列，返回 task_id。user_id 即系统用户名。
+        设备分配推迟到执行时，提交时只记录需求数量。"""
         task_id = uuid.uuid4().hex[:12]
-        devices_list = devices or []
 
         # 持久化到 DB
         self._db.insert_task(
             task_id=task_id, user_id=user_id, command=command,
-            cpu=cpu, mem=mem, devices=devices_list, password=password)
+            cpu=cpu, mem=mem, devices=[], password=password)
 
         task = {
             'task_id': task_id,
@@ -287,7 +288,8 @@ class TaskQueue:
             'command': command,
             'cpu': cpu,
             'mem': mem,
-            'devices': devices_list,
+            'device_num': device_num,
+            'devices': [],          # 执行时才分配
             'status': 'queued',
             'position': 0,
             'created_at': time.time(),
@@ -369,6 +371,7 @@ class TaskQueue:
             'position': task.get('position', 0),
             'cpu': task.get('cpu', 0),
             'mem': task.get('mem', '0'),
+            'device_num': task.get('device_num', len(task.get('devices') or [])),
             'devices': task.get('devices', []),
             'created_at': task.get('created_at'),
             'started_at': task.get('started_at'),
@@ -378,7 +381,9 @@ class TaskQueue:
     # ── 消费循环 ──────────────────────────────────────────────
 
     def _consume_loop(self):
-        """后台线程：从队列中取任务，逐个执行。"""
+        """后台线程：从队列中取任务，逐个执行。
+        设备分配推迟到执行时：若当前设备不足，任务回队尾等待。"""
+        sbx = SbxManager.get_instance()
         while self._running_flag:
             task = None
             with self._lock:
@@ -391,6 +396,25 @@ class TaskQueue:
                 task['started_at'] = time.time()
                 self._running = task
                 self._reindex()
+
+            # 执行前分配设备：不足则回队尾等待
+            device_num = task.get('device_num', 0)
+            if device_num > 0:
+                free = sbx._get_free_devices()
+                if len(free) < device_num:
+                    logger.info('任务 %s 等待设备 (%s/%s 空闲)，重回队尾',
+                                task['task_id'], len(free), device_num)
+                    with self._lock:
+                        task['status'] = 'queued'
+                        task['started_at'] = None
+                        self._pending[task['task_id']] = task
+                        self._reindex()
+                        self._running = None
+                        self._cv.notify()
+                    time.sleep(5)  # 等 5s 再试，避免空转
+                    continue
+                task['devices'] = free[:device_num]
+                logger.warning('任务 %s 分配设备: %s', task['task_id'], task['devices'])
 
             # 更新 DB 状态为 running
             self._db.update_task_status(
@@ -486,14 +510,12 @@ def run_command():
     if not isinstance(device_num, int) or device_num < 0:
         device_num = 0
 
-    # 分配设备
-    devices = []
+    # 防呆：请求数量超过系统设备总数，直接拒绝
     if device_num > 0:
         sbx = SbxManager.get_instance()
-        free = sbx._get_free_devices()
-        if len(free) < device_num:
-            return {'error': f'设备不足: 需要 {device_num} 个, 可用 {len(free)} 个'}, 503
-        devices = free[:device_num]
+        total = len(sbx._discover_device_nodes(sbx.device_major))
+        if device_num > total:
+            return {'error': f'设备不足: 需要 {device_num} 个, 系统共 {total} 个'}, 400
 
     tq = TaskQueue.get_instance()
     task_id = tq.submit(
@@ -501,7 +523,7 @@ def run_command():
         command=command,
         cpu=cpu,
         mem=sandbox_mem,
-        devices=devices if devices else None,
+        device_num=device_num,
         password=password,
     )
 
