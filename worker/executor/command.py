@@ -120,14 +120,14 @@ def execute_in_sandbox(
                 f.write(str(os.getpid()))
 
     try:
-        logger.debug("启动进程, cgroup=%s, user=%s", cg_procs, username or '(root)')
+        logger.warning("启动进程, cgroup=%s, user=%s", cg_procs, username or '(root)')
         proc = subprocess.Popen(
             ['bash', '-c', command],
             preexec_fn=preexec,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        logger.debug("子进程 PID=%s 已启动", proc.pid)
+        logger.warning("子进程 PID=%s 已启动", proc.pid)
 
         # 3. 更新 DB 记录（join_sandbox 也会写 cgroup.procs，幂等）
         time.sleep(0.05)
@@ -137,7 +137,7 @@ def execute_in_sandbox(
             logger.warning("join_sandbox 跳过 (进程可能已退出): %s", e)
 
         # 4. 等待命令执行完成
-        logger.debug("等待 PID=%s 完成 (timeout=%ss)", proc.pid, timeout)
+        logger.warning("等待 PID=%s 完成 (timeout=%ss)", proc.pid, timeout)
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
             timed_out = False
@@ -155,7 +155,7 @@ def execute_in_sandbox(
                     pass
             stdout, stderr = proc.communicate()
 
-        logger.info("PID=%s 完成, rc=%s", proc.pid, proc.returncode)
+        logger.warning("PID=%s 完成, rc=%s", proc.pid, proc.returncode)
         return {
             'returncode': proc.returncode if not timed_out else -1,
             'stdout': stdout.decode('utf-8', errors='replace'),
@@ -177,7 +177,7 @@ def execute_in_sandbox(
             'timed_out': False, 'error': 'exception',
         }
     finally:
-        logger.debug("清理沙盒 '%s'", sandbox_name)
+        logger.warning("清理沙盒 '%s'", sandbox_name)
         try:
             sbx.destroy_sandbox(sandbox_name)
         except Exception as e:
