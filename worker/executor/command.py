@@ -206,8 +206,9 @@ class TaskQueue:
 
         # 等待队列: 有序字典保持 FIFO，key=task_id（内存，驱动消费线程）
         self._pending: OrderedDict[str, dict] = OrderedDict()
-        # 当前正在执行的任务
-        self._running: dict | None = None
+        # 当前正在执行的任务（支持并发）
+        self._running: dict[str, dict] = {}
+        self._device_lock = threading.Lock()  # 设备分配互斥锁
 
         self._running_flag = False
         self._worker_thread: threading.Thread | None = None
@@ -329,7 +330,7 @@ class TaskQueue:
                 del self._pending[tid]
                 self._db.delete_task(tid)
                 deleted += 1
-            elif self._running and self._running.get('task_id') == tid:
+            elif tid in self._running:
                 continue  # running, skip
             else:
                 self._db.delete_task(tid)
@@ -390,62 +391,19 @@ class TaskQueue:
 
     # ── 消费循环 ──────────────────────────────────────────────
 
-    def _consume_loop(self):
-        """后台线程：从队列中取任务，逐个执行。
-        设备分配推迟到执行时：若当前设备不足，任务回队尾等待。"""
-        sbx = SbxManager.get_instance()
-        while self._running_flag:
-            task = None
-            with self._lock:
-                if not self._pending:
-                    self._cv.wait(timeout=30)
-                    continue
-
-                _, task = self._pending.popitem(last=False)
-                task['status'] = 'running'
-                task['started_at'] = time.time()
-                self._running = task
-                self._reindex()
-
-            # 执行前分配设备：不足则回队尾等待
-            device_num = task.get('device_num', 0)
-            if device_num > 0:
-                free = sbx._get_free_devices()
-                if len(free) < device_num:
-                    logger.info('任务 %s 等待设备 (%s/%s 空闲)，重回队尾',
-                                task['task_id'], len(free), device_num)
-                    with self._lock:
-                        task['status'] = 'queued'
-                        task['started_at'] = None
-                        self._pending[task['task_id']] = task
-                        self._reindex()
-                        self._running = None
-                        self._cv.notify()
-                    time.sleep(5)  # 等 5s 再试，避免空转
-                    continue
-                task['devices'] = free[:device_num]
-                logger.warning('任务 %s 分配设备: %s', task['task_id'], task['devices'])
-
-            # 更新 DB 状态为 running（含已分配的设备）
-            self._db.update_task_status(
-                task['task_id'], 'running', started_at=task['started_at'],
-                devices=task.get('devices', []))
-
-            # 在锁外执行
-            logger.info('开始执行: %s user=%s cmd=%s...',
-                        task['task_id'], task['user_id'], task['command'][:60])
-
+    def _execute_one(self, task: dict, devices: list):
+        """在独立线程中执行单个任务，完成后自动清理 running 状态。"""
+        try:
             sandbox_name = f"cmd_{task['task_id']}"
             result = execute_in_sandbox(
                 command=task['command'],
                 sandbox_name=sandbox_name,
                 cpu=task.get('cpu', 0),
                 mem=task.get('mem', '0'),
-                devices=task.get('devices') if task.get('devices') else None,
+                devices=devices if devices else None,
                 username=task['user_id'],
             )
 
-            # 持久化结果到 DB
             finished_at = time.time()
             status = ('completed' if result.get('returncode') == 0
                       and not result.get('timed_out') else 'failed')
@@ -459,16 +417,79 @@ class TaskQueue:
                 error=result.get('error'),
                 finished_at=finished_at,
             )
-
-            # 淘汰过旧记录
             self._db.cleanup_old_tasks(keep=MAX_COMPLETED_TASKS)
 
-            # 更新内存状态
             with self._lock:
                 task['result'] = result
                 task['finished_at'] = finished_at
                 task['status'] = status
-                self._running = None
+                if task['task_id'] in self._running:
+                    del self._running[task['task_id']]
+                self._cv.notify()
+
+            logger.info('执行完成: %s status=%s returncode=%s',
+                        task['task_id'], status, result.get('returncode'))
+        except Exception as e:
+            logger.error('任务 %s 异常: %s', task['task_id'], e)
+            with self._lock:
+                if task['task_id'] in self._running:
+                    del self._running[task['task_id']]
+                self._cv.notify()
+
+    def _consume_loop(self):
+        """后台线程：从队列取任务，并发执行。设备不足时任务回队尾等待。"""
+        sbx = SbxManager.get_instance()
+        while self._running_flag:
+            task = None
+            with self._lock:
+                if not self._pending:
+                    self._cv.wait(timeout=5)
+                    continue
+
+                _, task = self._pending.popitem(last=False)
+                task['status'] = 'running'
+                task['started_at'] = time.time()
+                self._running[task['task_id']] = task
+                self._reindex()
+
+            # 分配设备（互斥，避免并发争抢）
+            device_num = task.get('device_num', 0)
+            allocated_devices = []
+            if device_num > 0:
+                with self._device_lock:
+                    free = sbx._get_free_devices()
+                    if len(free) < device_num:
+                        logger.info('任务 %s 等待设备 (%s/%s 空闲)，重回队尾',
+                                    task['task_id'], len(free), device_num)
+                        with self._lock:
+                            task['status'] = 'queued'
+                            task['started_at'] = None
+                            del self._running[task['task_id']]
+                            self._pending[task['task_id']] = task
+                            self._reindex()
+                            self._cv.notify()
+                        time.sleep(5)
+                        continue
+                    allocated_devices = free[:device_num]
+                    task['devices'] = allocated_devices
+                    logger.warning('任务 %s 分配设备: %s', task['task_id'], allocated_devices)
+
+            # 更新 DB
+            self._db.update_task_status(
+                task['task_id'], 'running', started_at=task['started_at'],
+                devices=allocated_devices if allocated_devices else None)
+
+            # 启动线程并发执行
+            logger.info('开始执行: %s user=%s cmd=%s... devices=%s',
+                        task['task_id'], task['user_id'],
+                        task['command'][:60], allocated_devices)
+            t = threading.Thread(
+                target=self._execute_one,
+                args=(task, allocated_devices),
+                daemon=True,
+                name=f'cmd-{task["task_id"][:8]}',
+            )
+            t.start()
 
             logger.info('完成: %s status=%s rc=%s',
                         task['task_id'], status, result.get('returncode'))
