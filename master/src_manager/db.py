@@ -30,7 +30,8 @@ class Database:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            db_path = os.path.join(os.path.dirname(__file__), '..', 'master.db')
+            db_dir = os.getenv('db_dir', os.path.join(os.path.dirname(__file__), '..', 'db'))
+            db_path = os.path.join(db_dir, 'master.db')
         self._db_path = os.path.abspath(db_path)
         os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
         self._local = threading.local()

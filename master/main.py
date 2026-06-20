@@ -5,6 +5,9 @@ import time
 from logging.handlers import RotatingFileHandler
 
 import flask
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── 集中日志配置 ─────────────────────────────────────────────
 _log_dir = os.path.join(os.path.dirname(__file__), 'logs')
@@ -42,15 +45,6 @@ _root_logger.addHandler(_console_handler)
 logging.getLogger('master').info('Master 启动，日志级别=%s，日志文件=%s', _raw_level, _log_file)
 
 
-class Config:
-    def __init__(self):
-        self.config = json.load(open('config.json'))
-
-    def get_instance(self):
-        if not hasattr(self, '_instance'):
-            self._instance = Config()
-        return self._instance
-
 from entry_point.terminal import terminal_bp
 from entry_point.command import command_bp
 from entry_point.nodes import nodes_bp
@@ -71,10 +65,11 @@ def home():
 
 
 if __name__ == '__main__':
-    ip = Config().config.get('master', {}).get('ip', '0.0.0.0')
-    port = int(Config().config.get('master', {}).get('port', 25565))
+    ip = os.getenv('listen', '0.0.0.0')
+    port = int(os.getenv('port', '25565'))
 
     # 启动后台轮询，定期查询所有 worker 节点状态
-    Nodes_Pool.get_nodes_pool().start_polling(interval=15)
+    poll_interval = int(os.getenv('poll_interval', '15'))
+    Nodes_Pool.get_nodes_pool().start_polling(interval=poll_interval)
 
     app.run(host=ip, port=port)
