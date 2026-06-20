@@ -80,7 +80,8 @@ function formatBytes(bytes) {
 }
 
 function isIdlePercent(cpuIdle) {
-  return typeof cpuIdle === 'number' && cpuIdle !== Math.floor(cpuIdle);
+  // Worker 始终上报百分比（0-100），用 ≤100 判断，避免 100.0 / 0.0 等整数百分比误判为核心数
+  return typeof cpuIdle === 'number' && cpuIdle <= 100;
 }
 
 function formatCpu(cpuIdle, cpuTotal) {
