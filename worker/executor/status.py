@@ -91,10 +91,8 @@ class Node_Manager:
             'idle_cpu': round(idle_cpu, 1),
             'total_mem': total_mem,
             'idle_mem': idle_mem,
-            'total_gpu': gpu['total'],
-            'idle_gpu': gpu['idle'],
-            'total_npu': npu['total'],
-            'idle_npu': npu['idle'],
+            'total_devices': gpu['total'] + npu['total'],
+            'idle_devices': gpu['idle'] + npu['idle'],
             'active_sandboxes': sandboxes,
         }
 

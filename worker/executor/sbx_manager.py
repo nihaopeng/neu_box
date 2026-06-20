@@ -2,8 +2,8 @@
 沙盒状态持久化到 SQLite，防止掉线后重复开沙盒出问题。
 
 设备分配模型:
-  - 从 .env 读取单一的 device_major（如 235 即 NPU，195 即 GPU）
-  - 扫描 /dev 发现该 major 下的所有字符设备节点（如 235:0, 235:1, ...）
+  - 从 .env 读取 device_filter 正则匹配 /dev 下的设备名
+  - 自动发现匹配的设备节点（如 nvidia0→195:0, nvidia1→195:1, ...）
   - 通过 DB 追踪每个沙盒已占用的设备，空闲设备 = 全部 - 已分配
   - 终端申请时按 device_num 从空闲池中分配
   - 通过 Node_Manager (status.py) 校验设备空闲数量
@@ -46,8 +46,8 @@ class SbxManager:
         )
         self._script_path = os.getenv('sandbox_script_path', default_script)
 
-        # 设备 major 号（单一值，从环境变量读取，默认 235 = NPU）
-        self.device_major = int(os.getenv('device_major', '235'))
+        # 设备过滤器（正则，匹配 /dev 下设备名）
+        self.device_filter = os.getenv('device_filter', '')
 
         # 本地 DB（统一 SQLite）
         self.db = Database.get_instance()
@@ -75,21 +75,32 @@ class SbxManager:
     def _cg_path(name: str) -> str:
         return f"/sys/fs/cgroup/sandbox_{name}"
 
-    @staticmethod
-    def _discover_device_nodes(major: int) -> List[str]:
-        """扫描 /dev 目录，找出指定 major 号的所有字符设备节点。
+    def _discover_device_nodes(self) -> List[str]:
+        """扫描 /dev 目录，用 device_filter 正则匹配设备。
+
+        .env 配置示例:
+          device_filter=nvidia[0-9]+     # 只匹配 nvidia0, nvidia1, ...
+          device_filter=davinci[0-9]+    # 只匹配 davinci0, davinci1, ...
 
         Returns:
-            "major:minor" 字符串列表，按 minor 排序，如 ["235:0", "235:1", ...]
+            "major:minor" 字符串列表，如 ["195:0", "195:1", ...]
         """
+        import re
+        _regex = re.compile(self.device_filter) if self.device_filter else None
+        if not _regex:
+            return []
+
         devices = []
         try:
             for entry in os.listdir('/dev'):
                 path = os.path.join('/dev', entry)
                 try:
+                    if not _regex.fullmatch(entry):
+                        continue
                     s = os.stat(path)
-                    if stat.S_ISCHR(s.st_mode) and os.major(s.st_rdev) == major:
-                        devices.append(f"{major}:{os.minor(s.st_rdev)}")
+                    if not stat.S_ISCHR(s.st_mode):
+                        continue
+                    devices.append(f"{os.major(s.st_rdev)}:{os.minor(s.st_rdev)}")
                 except OSError:
                     continue
         except OSError:
@@ -111,7 +122,7 @@ class SbxManager:
 
     def _get_free_devices(self) -> List[str]:
         """返回当前空闲的设备节点列表（全部 - 已分配），按 minor 排序。"""
-        all_devices = set(self._discover_device_nodes(self.device_major))
+        all_devices = set(self._discover_device_nodes())
         allocated = self._get_allocated_devices()
         free = sorted(all_devices - allocated, key=lambda x: int(x.split(':')[1]))
         return free
@@ -130,32 +141,17 @@ class SbxManager:
     # ── 设备空闲校验 ─────────────────────────────────────────────
 
     def _validate_idle_count(self, needed: int) -> bool:
-        """通过 Node_Manager (status.py) 校验设备空闲数量是否足够。
-
-        根据 device_major 选择对应的信息源:
-          235 → npu_info() (NPU / Davinci)
-          195 → gpu_info() (NVIDIA GPU)
-        """
-        # 延迟导入，避免在 status.py 初始化前触发
+        """通过 Node_Manager 校验设备空闲数量是否足够。"""
         from executor.status import Node_Manager
         nm = Node_Manager.get_instance()
+        status = nm.collect_status()
+        idle = status.get('idle_devices', 0)
 
-        if self.device_major == 235:
-            info = nm.npu_info()
-        elif self.device_major == 195:
-            info = nm.gpu_info()
-        else:
-            # 未知 major，跳过系统级校验，仅依赖 DB
-            return True
-
-        idle = info.get('idle', 0)
         if idle < needed:
-            logger.warning("设备不足: 需要 %s 个, 系统空闲 %s 个 (major=%s)",
-                           needed, idle, self.device_major)
+            logger.warning("设备不足: 需要 %s 个, 系统空闲 %s 个", needed, idle)
             return False
 
-        logger.debug("设备校验通过: 需要 %s 个, 系统空闲 %s 个 (major=%s)",
-                     needed, idle, self.device_major)
+        logger.debug("设备校验通过: 需要 %s 个, 系统空闲 %s 个", needed, idle)
         return True
 
     # ── 核心操作 ─────────────────────────────────────────────────

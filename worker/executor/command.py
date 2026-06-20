@@ -586,7 +586,7 @@ def run_command():
     # 防呆：请求数量超过系统设备总数，直接拒绝
     if device_num > 0:
         sbx = SbxManager.get_instance()
-        total = len(sbx._discover_device_nodes(sbx.device_major))
+        total = len(sbx._discover_device_nodes())
         if device_num > total:
             return {'error': f'设备不足: 需要 {device_num} 个, 系统共 {total} 个'}, 400
 

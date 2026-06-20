@@ -24,10 +24,8 @@ class Nodes:
         self.idle_cpu = 0
         self.total_mem = 0               # bytes
         self.idle_mem = 0                # bytes
-        self.total_gpu = 0
-        self.idle_gpu = 0
-        self.total_npu = 0
-        self.idle_npu = 0
+        self.total_devices = 0
+        self.idle_devices = 0
         self.active_sandboxes = 0
         self.last_heartbeat = 0.0        # timestamp
 
@@ -38,10 +36,8 @@ class Nodes:
         self.idle_cpu = data.get('idle_cpu', self.idle_cpu)
         self.total_mem = data.get('total_mem', self.total_mem)
         self.idle_mem = data.get('idle_mem', self.idle_mem)
-        self.total_gpu = data.get('total_gpu', self.total_gpu)
-        self.idle_gpu = data.get('idle_gpu', self.idle_gpu)
-        self.total_npu = data.get('total_npu', self.total_npu)
-        self.idle_npu = data.get('idle_npu', self.idle_npu)
+        self.total_devices = data.get('total_devices', self.total_devices)
+        self.idle_devices = data.get('idle_devices', self.idle_devices)
         self.active_sandboxes = data.get('active_sandboxes', self.active_sandboxes)
         self.last_heartbeat = time.time()
 
@@ -156,10 +152,8 @@ class Nodes_Pool:
                 'idle_cpu': node.idle_cpu,
                 'total_mem': node.total_mem,
                 'idle_mem': node.idle_mem,
-                'total_gpu': node.total_gpu,
-                'idle_gpu': node.idle_gpu,
-                'total_npu': node.total_npu,
-                'idle_npu': node.idle_npu,
+                'total_devices': node.total_devices,
+                'idle_devices': node.idle_devices,
                 'active_sandboxes': node.active_sandboxes,
             })
         return result
@@ -269,9 +263,8 @@ class Nodes_Pool:
                 timeout=timeout,
             )
             logger.debug('转发 → %s %s 状态 %s', node_id, endpoint, resp.status_code)
-            if not resp.ok:
-                detail = resp.text[:200] if resp.text else f'HTTP {resp.status_code}'
-                raise ValueError(f'Worker 返回错误: {detail}')
+            if not resp.ok and resp.text and resp.text.strip().startswith('<!'):
+                raise ValueError(f'Worker 返回错误: {resp.text[:200]}')
             return resp
         except requests.RequestException as e:
             raise ValueError(f'无法连接节点 {node_id}: {e}')
@@ -299,9 +292,8 @@ class Nodes_Pool:
                 timeout=timeout,
             )
             logger.debug('GET → %s %s 状态 %s', node_id, endpoint, resp.status_code)
-            if not resp.ok:
-                detail = resp.text[:200] if resp.text else f'HTTP {resp.status_code}'
-                raise ValueError(f'Worker 返回错误: {detail}')
+            if not resp.ok and resp.text and resp.text.strip().startswith('<!'):
+                raise ValueError(f'Worker 返回错误: {resp.text[:200]}')
             return resp
         except requests.RequestException as e:
             raise ValueError(f'无法连接节点 {node_id}: {e}')

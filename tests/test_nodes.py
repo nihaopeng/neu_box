@@ -20,29 +20,27 @@ def test_all_nodes_online_and_valid():
         assert_gt(node.get("total_cpu", 0), 0, f"{name} total_cpu 为 0")
         assert_gt(node.get("total_mem", 0), 0, f"{name} total_mem 为 0")
         assert node.get("idle_cpu", -1) >= 0, f"{name} idle_cpu 为负数"
-        assert node.get("idle_gpu", 0) <= node.get("total_gpu", 0), \
-            f"{name} idle_gpu > total_gpu"
+        assert node.get("idle_devices", 0) <= node.get("total_devices", 0), \
+            f"{name} idle_devices > total_devices"
         print(f"    {name}: CPU={node['total_cpu']}核 idle={node['idle_cpu']}%, "
-              f"GPU={node['idle_gpu']}/{node['total_gpu']}, "
+              f"设备={node['idle_devices']}/{node['total_devices']}, "
               f"Mem={node['idle_mem']//(1024**3)}GB 空闲", flush=True)
 
 
 def test_single_node_status():
-    """单个节点 GET /nodes/<id>/status 返回完整字段。"""
+    """单个节点 GET /nodes/<id>/status 返回字段完整。"""
     gpu_id = get_gpunode_id()
     _, data = get(f"/nodes/{gpu_id}/status")
     assert_ok(_, f"获取节点状态失败: {data}")
-    # 离线时返回 error 而非状态字段
     if "error" in data:
         print(f"    节点离线: {data.get('error')}", flush=True)
         return
     for f in ("status", "total_cpu", "idle_cpu", "total_mem", "idle_mem",
-              "total_gpu", "idle_gpu", "total_npu", "idle_npu",
-              "active_sandboxes"):
+              "total_devices", "idle_devices", "active_sandboxes"):
         assert f in data, f"缺少字段 {f}"
     assert_gt(data.get("total_cpu", 0), 0, "total_cpu 不应为 0")
     print(f"    CPU {data['total_cpu']}核, "
-          f"GPU {data['idle_gpu']}/{data['total_gpu']}, "
+          f"设备 {data['idle_devices']}/{data['total_devices']}, "
           f"Mem {data['idle_mem']//(1024**3)}GB idle, "
           f"sandboxes={data['active_sandboxes']}", flush=True)
 

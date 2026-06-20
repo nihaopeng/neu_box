@@ -245,12 +245,9 @@ function renderNodeCard(node) {
           <span class="resource-text">${formatBytes(memUsed)} / ${formatBytes(node.total_mem)}</span>
         </div>
         <div class="device-row">
-          <span class="device-label">GPU</span>
-          ${renderDeviceChips(node.idle_gpu)}
-        </div>
-        <div class="device-row">
-          <span class="device-label">NPU</span>
-          ${renderDeviceChips(node.idle_npu)}
+          <span class="device-label">设备</span>
+          ${renderDeviceChips(node.idle_devices)}
+          <span class="device-text" style="margin-left:4px">/ ${node.total_devices} 总</span>
         </div>
         ${node.active_sandboxes > 0 ? `
         <div class="sandbox-count">${node.active_sandboxes} 个沙盒运行中</div>

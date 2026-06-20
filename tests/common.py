@@ -145,13 +145,10 @@ def get_gpunode_id():
             return n["node_id"]
     raise AssertionError("找不到 GPU 节点")
 
-def get_npunode_id():
-    """获取 gpunode2 的 node_id。"""
+def get_devnode_id():
+    """获取任一有设备的节点（GPU 或 NPU）。"""
     _, data = post("/nodes/get_all_nodes", {})
     for n in data.get("nodes", []):
-        if "npu" in n.get("name", "").lower():
+        if n.get("total_devices", 0) > 0:
             return n["node_id"]
-    for n in data.get("nodes", []):
-        if n.get("total_npu", 0) > 0:
-            return n["node_id"]
-    raise AssertionError("找不到 NPU 节点")
+    raise AssertionError("找不到有设备的节点")
