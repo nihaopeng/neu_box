@@ -62,23 +62,28 @@
   gap: 6px;
   padding: 7px 8px;
   border-radius: 8px;
+  border: 1px solid transparent;
   background: var(--bg);
   font-size: 11px;
   cursor: default;
-  transition: background .15s;
+  transition: background .15s, border-color .15s, box-shadow .15s;
 }
 
 .queue-item.running {
   background: #e8f4fd;
-  border: 1px solid rgba(0,113,227,.2);
+  border-color: rgba(0,113,227,.2);
 }
 
 .queue-item.clickable {
   cursor: pointer;
 }
 
-.queue-item.clickable:hover {
+.queue-item.clickable:hover,
+.queue-item.active {
   background: #e8f4fd;
+  border-color: rgba(0,113,227,.5);
+  box-shadow: 0 0 0 1px rgba(0,113,227,.15);
+}
 }
 
 .queue-pos {

@@ -34,6 +34,9 @@ function renderQueue(data) {
   queueList.querySelectorAll('.queue-item.clickable').forEach(item => {
     item.addEventListener('click', (e) => {
       if (e.target.classList.contains('queue-check')) return;
+      // 选中高亮
+      queueList.querySelectorAll('.queue-item.active').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
       const taskId = item.dataset.taskId;
       if (taskId) viewTaskLog(taskId);
     });

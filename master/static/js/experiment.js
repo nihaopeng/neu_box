@@ -345,6 +345,8 @@ function renderExperimentList(experiments) {
 
   experimentList.querySelectorAll('.exp-card').forEach(card => {
     card.addEventListener('click', () => {
+      experimentList.querySelectorAll('.exp-card.active').forEach(el => el.classList.remove('active'));
+      card.classList.add('active');
       const expId = card.dataset.expId;
       if (expId) viewExperiment(expId);
     });

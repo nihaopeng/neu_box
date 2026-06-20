@@ -17,12 +17,18 @@
 
 .exp-card {
   padding: 10px;
+  border: 1px solid transparent;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
-  transition: background .12s;
+  transition: background .12s, border-color .12s, box-shadow .12s;
 }
 
-.exp-card:hover { background: var(--hover); }
+.exp-card:hover,
+.exp-card.active {
+  background: var(--hover);
+  border-color: rgba(0,113,227,.3);
+  box-shadow: 0 0 0 1px rgba(0,113,227,.12);
+}
 
 .exp-card-header {
   display: flex;

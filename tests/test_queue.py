@@ -8,11 +8,10 @@ from common import (
 )
 
 QUICK = "--quick" in sys.argv
-TASK_COUNT      = 4 if QUICK else 6
+TASK_COUNT      = 8 if QUICK else 20
 DEVICE_PER_TASK = 1
 CPU_PER_TASK    = 1
 MEM_PER_TASK    = 1
-SLEEP_SECONDS   = 5 if QUICK else 10
 POLL_INTERVAL   = 2
 TEST_USERS      = ["pengyt", "lipz"]
 
@@ -28,25 +27,29 @@ def test_concurrency():
     name = node.get("name", "?")
     print(f"    {name}: 总设备={total_dev}", flush=True)
 
+    # 不同任务不同耗时，模拟真实并发
+    sleep_times = [3, 5, 7, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6][:TASK_COUNT]
+    timeout = sum(sleep_times) + 30
+
     task_ids = []
     for i in range(TASK_COUNT):
         user = TEST_USERS[i % len(TEST_USERS)]
+        s = sleep_times[i]
         _, d = post("/command/run", {
             "node_id": gpu_id, "user_id": user,
-            "command": f"echo '[{user}] T{i+1} start'; sleep {SLEEP_SECONDS}; echo 'T{i+1} done'",
+            "command": f"echo '[{user}] T{i+1}({s}s) start'; sleep {s}; echo 'T{i+1} done'",
             "cpu": CPU_PER_TASK, "memory": MEM_PER_TASK,
             "mem_unit": "GB", "device_num": DEVICE_PER_TASK,
         })
         assert_ok(_, f"任务{i+1} 提交失败: {d.get('error',_)}")
         task_ids.append(d["task_id"])
-        print(f"    T{i+1}: {d['task_id'][:12]}... pos=#{d['position']}", flush=True)
+        print(f"    T{i+1}: {d['task_id'][:12]}... {s}s pos=#{d['position']}", flush=True)
         time.sleep(0.05)
 
     max_running = 0
     max_devices_used = 0
     done_count = 0
     start = time.time()
-    timeout = TASK_COUNT * SLEEP_SECONDS + 30
 
     while done_count < len(task_ids) and (time.time() - start) < timeout:
         _, data = get(f"/command/queue?node_id={gpu_id}")
