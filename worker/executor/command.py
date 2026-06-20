@@ -319,28 +319,18 @@ class TaskQueue:
         all_tasks = active + [t for t in recent if t['task_id'] not in active_ids]
         return [self._format_public(t) for t in all_tasks]
 
-    def get_result(self, task_id: str, user_id: str, password: str = '') -> dict | None:
-        """获取任务结果。需 user_id 匹配 + password 正确才返回日志。
+    def get_result(self, task_id: str, user_id: str = '', password: str = '') -> dict | None:
+        """获取任务结果。user_id 仅作归属标记，不校验密码。
 
         Returns:
             None 表示任务不存在
-            dict: 含 status、user_id 等公开字段。
-                  'result' 仅当 user_id 匹配且密码正确时包含。
-                  'permission_denied'=True 表示身份匹配但密码错误。
+            dict: 含 status、user_id 等公开字段 + result（日志）。
         """
         task = self._db.get_task(task_id)
         if task is None:
             return None
 
         public = self._format_public(task)
-        if task['user_id'] != user_id:
-            return public  # 别人的任务，不返回日志
-
-        # 验证密码
-        if not self._db.verify_task_password(task_id, password):
-            public['permission_denied'] = True
-            return public
-
         public['result'] = {
             'stdout': task.get('stdout') or '',
             'stderr': task.get('stderr') or '',
@@ -486,10 +476,6 @@ def run_command():
     user_id = (body.get('user_id') or '').strip()
     if not user_id:
         return {'error': 'user_id 不能为空'}, 400
-
-    password = body.get('password') or ''
-    if not password:
-        return {'error': '密码不能为空'}, 400
 
     cpu = body.get('cpu', 0)
     if not isinstance(cpu, int) or cpu < 0:

@@ -26,7 +26,6 @@ def run():
     if not user_id:
         return {'error': 'user_id 不能为空'}, 400
 
-    # 构建转发请求
     req = {
         'command': command,
         'user_id': user_id,
@@ -63,23 +62,19 @@ def queue():
 
 @command_bp.route('/result/<task_id>', methods=['GET'])
 def result(task_id: str):
-    """查看任务结果（需 user_id 校验）。
+    """查看任务结果。
 
-    Query: ?node_id=xxx&user_id=yyy
+    Query: ?node_id=xxx
     """
     node_id = (request.args.get('node_id') or '').strip()
-    user_id = (request.args.get('user_id') or '').strip()
-    password = request.args.get('password') or ''
 
     if not node_id:
         return {'error': 'node_id 参数必填'}, 400
-    if not user_id:
-        return {'error': 'user_id 参数必填'}, 400
 
     try:
         resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(
             node_id, f'/command/result/{task_id}',
-            params={'user_id': user_id, 'password': password})
+            params={'user_id': request.args.get('user_id', '')})
         return resp.json(), resp.status_code
     except ValueError as e:
         return {'error': str(e)}, 404

@@ -40,12 +40,18 @@ const passwordInput     = document.getElementById('passwordInput');
 
 // Command fields
 const cmdUserIdEl       = document.getElementById('cmdUserId');
-const cmdPasswordEl     = document.getElementById('cmdPassword');
 const cmdInputEl        = document.getElementById('cmdInput');
 
 // Queue
 const queueList         = document.getElementById('queueList');
 const queueRefreshBtn   = document.getElementById('queueRefreshBtn');
+
+// Experiment (shared refs)
+const logActions        = document.getElementById('logActions');
+const saveExpBtn        = document.getElementById('saveExpBtn');
+// shared with experiment.js
+let _currentTaskData = null;
+let _currentExpData = null;
 
 // Right panel
 const rightPanel        = document.getElementById('rightPanel');
@@ -132,12 +138,18 @@ function switchMode(mode) {
   if (mode === 'terminal') {
     terminalFields.style.display = '';
     commandFields.style.display = 'none';
+    queuePanel.style.display = '';
+    experimentPanel.style.display = 'none';
+    submitBtn.style.display = '';
     submitBtn.textContent = '申请终端';
     rightPanel.classList.add('mode-terminal');
     rightPanel.classList.remove('mode-command');
-  } else {
+  } else if (mode === 'command') {
     terminalFields.style.display = 'none';
     commandFields.style.display = '';
+    queuePanel.style.display = '';
+    experimentPanel.style.display = 'none';
+    submitBtn.style.display = '';
     submitBtn.textContent = '提交命令';
     rightPanel.classList.add('mode-command');
     rightPanel.classList.remove('mode-terminal');
@@ -145,6 +157,22 @@ function switchMode(mode) {
     logPlaceholder.style.display = '';
     logContent.style.display = 'none';
     logContent.innerHTML = '';
+    logActions.style.display = 'none';
+  } else if (mode === 'experiment') {
+    terminalFields.style.display = 'none';
+    commandFields.style.display = 'none';
+    queuePanel.style.display = 'none';
+    experimentPanel.style.display = '';
+    submitBtn.style.display = 'none';
+    rightPanel.classList.add('mode-command');
+    rightPanel.classList.remove('mode-terminal');
+    // Reset log viewer
+    logPlaceholder.style.display = '';
+    logContent.style.display = 'none';
+    logContent.innerHTML = '';
+    logActions.style.display = 'none';
+    // Load experiments
+    fetchExperiments();
   }
 
   updateSubmitBtn();
@@ -331,7 +359,7 @@ function updateSubmitBtn() {
   if (state.mode === 'terminal') {
     submitBtn.disabled = !(usernameInput.value.trim() && passwordInput.value);
   } else {
-    submitBtn.disabled = !(cmdUserIdEl.value.trim() && cmdPasswordEl.value && cmdInputEl.value.trim());
+    submitBtn.disabled = !(cmdUserIdEl.value.trim() && cmdInputEl.value.trim());
   }
 }
 
@@ -343,7 +371,6 @@ cmdUserIdEl.addEventListener('input', () => {
   localStorage.setItem('neu_box_cmd_user', state.cmdUserId);
   updateSubmitBtn();
 });
-cmdPasswordEl.addEventListener('input', updateSubmitBtn);
 cmdInputEl.addEventListener('input', updateSubmitBtn);
 
 // ═══════════════════════════════════════════════════════════════
@@ -446,182 +473,6 @@ memUnitEl.addEventListener('click', (e) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// Terminal
-// ═══════════════════════════════════════════════════════════════
-
-function openTerminal(url) {
-  terminalIframe.src = url;
-  terminalUrlEl.textContent = url;
-  rightPanel.classList.add('active');
-}
-
-function closeTerminal() {
-  terminalIframe.src = '';
-  terminalUrlEl.textContent = '';
-  rightPanel.classList.remove('active');
-}
-
-terminalClose.addEventListener('click', closeTerminal);
-
-// ═══════════════════════════════════════════════════════════════
-// Queue
-// ═══════════════════════════════════════════════════════════════
-
-function renderQueue(data) {
-  const queue = data.queue || [];
-  if (queue.length === 0) {
-    queueList.innerHTML = '<div class="queue-empty">队列为空</div>';
-    return;
-  }
-
-  queueList.innerHTML = queue.map(task => {
-    const isRunning = task.status === 'running';
-    const posText = isRunning ? '▶' : (task.position || '?');
-    const isOwn = state.cmdUserId && task.user_id === state.cmdUserId;
-    const isDone = task.status === 'completed' || task.status === 'failed';
-    const clickable = isOwn && isDone;
-
-    return `
-      <div class="queue-item ${isRunning ? 'running' : ''} ${clickable ? 'clickable' : ''}"
-           data-task-id="${task.task_id}"
-           data-user-id="${escapeHtml(task.user_id)}"
-           title="${clickable ? '点击查看日志' : ''}">
-        <span class="queue-pos">${posText}</span>
-        <span class="queue-user" title="${escapeHtml(task.user_id)}">${escapeHtml(task.user_id)}</span>
-        <span class="queue-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</span>
-        <span class="queue-status ${task.status}">${statusLabel(task.status)}</span>
-      </div>`;
-  }).join('');
-
-  // Bind click: only own + completed/failed → view log
-  queueList.querySelectorAll('.queue-item.clickable').forEach(item => {
-    item.addEventListener('click', () => {
-      const taskId = item.dataset.taskId;
-      if (taskId) viewTaskLog(taskId);
-    });
-  });
-}
-
-function statusLabel(s) {
-  const map = { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败' };
-  return map[s] || s;
-}
-
-async function fetchQueue() {
-  if (!state.selectedNodeId) {
-    queueList.innerHTML = '<div class="queue-empty">选择节点后刷新</div>';
-    return;
-  }
-
-  try {
-    const resp = await fetch(`/command/queue?node_id=${encodeURIComponent(state.selectedNodeId)}`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    renderQueue(data);
-  } catch (err) {
-    queueList.innerHTML = `<div class="queue-empty">加载失败: ${err.message}</div>`;
-  }
-}
-
-// Manual refresh only
-queueRefreshBtn.addEventListener('click', () => {
-  queueRefreshBtn.classList.add('spinning');
-  fetchQueue().finally(() => queueRefreshBtn.classList.remove('spinning'));
-});
-
-// Also refresh when switching nodes (handled in selectNode)
-
-// ═══════════════════════════════════════════════════════════════
-// Log viewer
-// ═══════════════════════════════════════════════════════════════
-
-async function viewTaskLog(taskId) {
-  if (!state.selectedNodeId) return;
-
-  // 自动切换到命令模式
-  if (state.mode !== 'command') {
-    switchMode('command');
-  }
-
-  // 未填写用户标识
-  if (!state.cmdUserId) {
-    logPlaceholder.style.display = 'none';
-    logContent.style.display = '';
-    logContent.innerHTML = '<div style="color:#ff5f57;font-size:16px;text-align:center;padding:40px">🔒 需要用户标识<br><span style="font-size:13px;color:#8e8e93">请在左侧填写"用户标识"后重试</span></div>';
-    return;
-  }
-
-  const password = cmdPasswordEl.value;
-  if (!password) {
-    logPlaceholder.style.display = 'none';
-    logContent.style.display = '';
-    logContent.innerHTML = '<div style="color:#ff5f57">请先输入密码</div>';
-    return;
-  }
-
-  logPlaceholder.style.display = 'none';
-  logContent.style.display = '';
-  logContent.innerHTML = '<div style="color:#636366">加载中…</div>';
-
-  try {
-    const params = new URLSearchParams({
-      node_id: state.selectedNodeId,
-      user_id: state.cmdUserId,
-      password: password,
-    });
-    const resp = await fetch(`/command/result/${taskId}?${params}`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const task = await resp.json();
-
-    // 密码错误 → 无权限
-    if (task.permission_denied) {
-      logContent.innerHTML = '<div style="color:#ff5f57;font-size:16px;text-align:center;padding:40px">🔒 无权限<br><span style="font-size:13px;color:#8e8e93">密码不正确</span></div>';
-      return;
-    }
-
-    if (task.error) {
-      logContent.innerHTML = `<div style="color:#ff5f57">错误: ${escapeHtml(task.error)}</div>`;
-      return;
-    }
-
-    let html = `<div class="log-meta">`;
-    html += `<strong>任务ID:</strong> ${escapeHtml(task.task_id)}<br>`;
-    html += `<strong>用户:</strong> ${escapeHtml(task.user_id)}<br>`;
-    html += `<strong>命令:</strong> ${escapeHtml(task.command)}<br>`;
-    html += `<strong>资源:</strong> CPU=${task.cpu || 0}, 内存=${task.mem || '0'}, 设备=${task.device_num || 0}`;
-    if (task.devices && task.devices.length > 0) {
-      html += ` (${escapeHtml(task.devices.join(', '))})`;
-    }
-    html += `<br>`;
-    html += `<strong>创建时间:</strong> ${formatTime(task.created_at)}<br>`;
-    html += `<strong>状态:</strong> ${statusLabel(task.status)}`;
-    if (task.result) {
-      html += ` | <strong>返回码:</strong> ${task.result.returncode}`;
-      if (task.result.timed_out) html += ` <span style="color:#ff5f57">(超时)</span>`;
-    }
-    html += `</div>`;
-
-    if (task.result) {
-      const r = task.result;
-      if (r.stdout) {
-        html += `<div class="log-stdout">${escapeHtml(r.stdout)}</div>`;
-      }
-      if (r.stderr) {
-        html += `<div class="log-stderr">${escapeHtml(r.stderr)}</div>`;
-      }
-      if (!r.stdout && !r.stderr) {
-        html += `<div class="log-no-output">(无输出)</div>`;
-      }
-    }
-
-    logContent.innerHTML = html;
-
-  } catch (err) {
-    logContent.innerHTML = `<div style="color:#ff5f57">加载失败: ${err.message}</div>`;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
 // Manual refresh
 // ═══════════════════════════════════════════════════════════════
 
@@ -648,120 +499,6 @@ form.addEventListener('submit', async (e) => {
     await submitCommand();
   }
 });
-
-async function submitTerminal() {
-  const username = usernameInput.value.trim();
-  const password = passwordInput.value;
-  if (!username) { showToast('请输入用户名', 'error'); return; }
-  if (!password) { showToast('请输入密码', 'error'); return; }
-
-  submitBtn.disabled = true;
-  submitBtn.textContent = '正在申请…';
-  resultDiv.style.display = 'none';
-
-  const body = {
-    node_id:  state.selectedNodeId,
-    cpu:      state.cpu,
-    memory:   state.memory,
-    mem_unit: state.memUnit,
-    device_num: state.device_num,
-    username: username,
-    password: password,
-  };
-
-  try {
-    const resp = await fetch('/terminal/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-
-    if (resp.ok) {
-      showToast('终端申请成功', 'success');
-      resultDiv.className = 'result';
-      resultDiv.innerHTML =
-        `<strong>✓ 终端已创建</strong><br>` +
-        (data.sandbox_id ? `ID: <code>${data.sandbox_id}</code><br>` : '') +
-        (data.message ? `${data.message}<br>` : '');
-
-      if (data.terminal_url) {
-        resultDiv.innerHTML += `地址: <code>${data.terminal_url}</code>`;
-        openTerminal(data.terminal_url);
-      }
-      resultDiv.style.display = 'block';
-      fetchNodes();
-    } else {
-      showToast(data.error || '申请失败', 'error');
-      resultDiv.className = 'result error';
-      resultDiv.innerHTML = `<strong>✗ 申请失败</strong><br>${escapeHtml(data.error || '未知错误')}`;
-      resultDiv.style.display = 'block';
-    }
-  } catch (err) {
-    showToast('网络错误，请稍后重试', 'error');
-    resultDiv.className = 'result error';
-    resultDiv.innerHTML = `<strong>✗ 网络错误</strong><br>${escapeHtml(err.message)}`;
-    resultDiv.style.display = 'block';
-  } finally {
-    submitBtn.disabled = false;
-    submitBtn.textContent = '申请终端';
-  }
-}
-
-async function submitCommand() {
-  const userId = cmdUserIdEl.value.trim();
-  const password = cmdPasswordEl.value;
-  const command = cmdInputEl.value.trim();
-  if (!userId)   { showToast('请输入用户标识', 'error'); return; }
-  if (!password) { showToast('请输入密码', 'error'); return; }
-  if (!command)  { showToast('请输入命令', 'error'); return; }
-
-  submitBtn.disabled = true;
-  submitBtn.textContent = '提交中…';
-  resultDiv.style.display = 'none';
-
-  const body = {
-    node_id:    state.selectedNodeId,
-    user_id:    userId,
-    password:   password,
-    command:    command,
-    cpu:        state.cpu,
-    memory:     state.memory,
-    mem_unit:   state.memUnit,
-    device_num: state.device_num,
-  };
-
-  try {
-    const resp = await fetch('/command/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-
-    if (resp.ok) {
-      showToast(`任务已提交，队列位置 #${data.position}`, 'success');
-      cmdInputEl.value = '';
-      resultDiv.className = 'result';
-      resultDiv.innerHTML = `<strong>✓ 已提交</strong><br>任务ID: <code>${escapeHtml(data.task_id)}</code><br>队列位置: #${data.position}`;
-      resultDiv.style.display = 'block';
-
-      // Refresh queue immediately
-      fetchQueue();
-    } else {
-      showToast(data.error || '提交失败', 'error');
-      resultDiv.className = 'result error';
-      resultDiv.innerHTML = `<strong>✗ 提交失败</strong><br>${escapeHtml(data.error || '未知错误')}`;
-      resultDiv.style.display = 'block';
-    }
-  } catch (err) {
-    showToast('网络错误: ' + err.message, 'error');
-  } finally {
-    submitBtn.disabled = false;
-    submitBtn.textContent = '提交命令';
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // Node management modal
 // ═══════════════════════════════════════════════════════════════
@@ -888,11 +625,3 @@ newNodePort.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') addConfigNode();
 });
 
-// ═══════════════════════════════════════════════════════════════
-// Init
-// ═══════════════════════════════════════════════════════════════
-
-// Initial queue load if node is selected
-if (state.selectedNodeId) {
-  fetchQueue();
-}
