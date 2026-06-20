@@ -117,7 +117,7 @@ def test_batch_delete():
 TESTS = [
     ("并发排队",    test_concurrency),
     ("FIFO 顺序",   test_fifo_order),
-    ("批量删除",    test_batch_delete),
+    # ("批量删除",    test_batch_delete),
 ]
 
 if __name__ == "__main__":

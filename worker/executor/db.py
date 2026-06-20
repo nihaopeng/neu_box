@@ -150,9 +150,13 @@ class Database:
         conn.commit()
 
     def update_task_status(self, task_id: str, status: str,
-                           started_at: float = None):
+                           started_at: float = None, devices: list = None):
         conn = self._get_conn()
-        if started_at:
+        if devices is not None:
+            conn.execute(
+                'UPDATE tasks SET status=?, started_at=?, devices=? WHERE task_id=?',
+                (status, started_at, json.dumps(devices), task_id))
+        elif started_at:
             conn.execute(
                 'UPDATE tasks SET status=?, started_at=? WHERE task_id=?',
                 (status, started_at, task_id))

@@ -426,9 +426,10 @@ class TaskQueue:
                 task['devices'] = free[:device_num]
                 logger.warning('任务 %s 分配设备: %s', task['task_id'], task['devices'])
 
-            # 更新 DB 状态为 running
+            # 更新 DB 状态为 running（含已分配的设备）
             self._db.update_task_status(
-                task['task_id'], 'running', started_at=task['started_at'])
+                task['task_id'], 'running', started_at=task['started_at'],
+                devices=task.get('devices', []))
 
             # 在锁外执行
             logger.info('开始执行: %s user=%s cmd=%s...',
