@@ -319,7 +319,7 @@ class TaskQueue:
         all_tasks = active + [t for t in recent if t['task_id'] not in active_ids]
         return [self._format_public(t) for t in all_tasks]
 
-    def get_result(self, task_id: str, user_id: str = '', password: str = '') -> dict | None:
+    def get_result(self, task_id: str) -> dict | None:
         """获取任务结果。user_id 仅作归属标记，不校验密码。
 
         Returns:
@@ -509,8 +509,7 @@ def run_command():
         command=command,
         cpu=cpu,
         mem=sandbox_mem,
-        device_num=device_num,
-        password=password,
+        device_num=device_num
     )
 
     # 从 DB 获取当前队列位置
@@ -548,12 +547,12 @@ def get_result(task_id: str):
     响应: 任务完整信息（含 stdout/stderr 当 user_id 匹配时）
     """
     user_id = (request.args.get('user_id') or '').strip()
-    password = request.args.get('password') or ''
+    # password = request.args.get('password') or ''
     if not user_id:
         return {'error': 'user_id 参数必填'}, 400
 
     tq = TaskQueue.get_instance()
-    result = tq.get_result(task_id, user_id, password)
+    result = tq.get_result(task_id)
 
     if result is None:
         return {'error': '任务不存在'}, 404

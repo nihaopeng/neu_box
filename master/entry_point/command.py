@@ -1,5 +1,6 @@
 """Master 命令执行入口 — 将前端请求转发到对应 Worker。"""
 
+import requests
 from flask import Blueprint, request
 from src_manager.nodes_pool import Nodes_Pool
 

@@ -262,13 +262,16 @@ class Nodes_Pool:
         node = self.get_node_by_id(node_id)
         if not node:
             raise ValueError(f'节点 {node_id} 不存在')
-        resp = requests.post(
-            f'http://{node.ip}:{node.port}{endpoint}',
-            json=req,
-            timeout=timeout,
-        )
-        logger.debug('转发 → %s %s 状态 %s', node_id, endpoint, resp.status_code)
-        return resp
+        try:
+            resp = requests.post(
+                f'http://{node.ip}:{node.port}{endpoint}',
+                json=req,
+                timeout=timeout,
+            )
+            logger.debug('转发 → %s %s 状态 %s', node_id, endpoint, resp.status_code)
+            return resp
+        except requests.RequestException as e:
+            raise ValueError(f'无法连接节点 {node_id}: {e}')
 
     def forward_get_to_node(self, node_id: str, endpoint: str,
                             params: dict = None, timeout: int = 30) -> requests.Response:
@@ -286,13 +289,16 @@ class Nodes_Pool:
         node = self.get_node_by_id(node_id)
         if not node:
             raise ValueError(f'节点 {node_id} 不存在')
-        resp = requests.get(
-            f'http://{node.ip}:{node.port}{endpoint}',
-            params=params,
-            timeout=timeout,
-        )
-        logger.debug('GET → %s %s 状态 %s', node_id, endpoint, resp.status_code)
-        return resp
+        try:
+            resp = requests.get(
+                f'http://{node.ip}:{node.port}{endpoint}',
+                params=params,
+                timeout=timeout,
+            )
+            logger.debug('GET → %s %s 状态 %s', node_id, endpoint, resp.status_code)
+            return resp
+        except requests.RequestException as e:
+            raise ValueError(f'无法连接节点 {node_id}: {e}')
 
     # ── 向指定节点转发终端创建请求（兼容旧接口）────────────────
 
