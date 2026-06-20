@@ -1,8 +1,95 @@
+import json
+import os
+import threading
+
 import flask
 from src_manager.nodes_pool import Nodes_Pool
 
 nodes_bp = flask.Blueprint('nodes', __name__)
 
+CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'config.json'))
+_config_lock = threading.Lock()
+
+
+def _read_config():
+    with open(CONFIG_PATH) as f:
+        return json.load(f)
+
+
+def _write_config(cfg):
+    with _config_lock:
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(cfg, f, indent=4, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+
+
+# ── config.json 管理（必须注册在 /<node_id>/status 之前，否则 /config 会被当成 node_id） ──
+
+@nodes_bp.route('/config', methods=['GET'])
+def get_config_nodes():
+    """返回 config.json 中的 nodes_pool 列表。"""
+    cfg = _read_config()
+    return {'nodes': cfg.get('nodes_pool', [])}, 200
+
+
+@nodes_bp.route('/config/add', methods=['POST'])
+def add_config_node():
+    """向 config.json 新增一个节点。"""
+    data = flask.request.get_json() or {}
+    name = (data.get('name', '') or '').strip()
+    host = (data.get('host', '') or '').strip()
+    port = data.get('port')
+
+    errors = []
+    if not name:
+        errors.append('节点名称不能为空')
+    if not host:
+        errors.append('host 不能为空')
+    if not isinstance(port, int) or port < 1 or port > 65535:
+        errors.append('端口必须在 1-65535 之间')
+    if errors:
+        return {'error': '; '.join(errors)}, 400
+
+    cfg = _read_config()
+    nodes = cfg.setdefault('nodes_pool', [])
+
+    # 检查名称是否重复
+    if any(n.get('name') == name for n in nodes):
+        return {'error': f"节点名称 '{name}' 已存在"}, 409
+
+    nodes.append({'name': name, 'host': host, 'port': port})
+    _write_config(cfg)
+
+    # 通知 Nodes_Pool 立即同步
+    Nodes_Pool.get_nodes_pool().sync_from_config()
+    return {'message': f"节点 '{name}' 已添加"}, 201
+
+
+@nodes_bp.route('/config/remove', methods=['POST'])
+def remove_config_node():
+    """从 config.json 删除一个节点（按名称匹配）。"""
+    data = flask.request.get_json() or {}
+    name = (data.get('name', '') or '').strip()
+    if not name:
+        return {'error': '节点名称不能为空'}, 400
+
+    cfg = _read_config()
+    nodes = cfg.get('nodes_pool', [])
+    before = len(nodes)
+    cfg['nodes_pool'] = [n for n in nodes if n.get('name') != name]
+
+    if len(cfg['nodes_pool']) == before:
+        return {'error': f"节点 '{name}' 不存在"}, 404
+
+    _write_config(cfg)
+
+    # 通知 Nodes_Pool 立即同步
+    Nodes_Pool.get_nodes_pool().sync_from_config()
+    return {'message': f"节点 '{name}' 已删除"}, 200
+
+
+# ── 运行时状态查询 ──────────────────────────────────────────
 
 @nodes_bp.route('/get_all_nodes', methods=['POST'])
 def get_all_nodes():

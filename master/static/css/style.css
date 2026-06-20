@@ -808,3 +808,148 @@ body {
   color: #636366;
   font-style: italic;
 }
+
+/* ── Node management modal ──────────────────────────────────── */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.35);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn .15s ease;
+}
+
+.modal-card {
+  background: var(--card-bg);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.15);
+  width: 440px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.modal-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  color: var(--sub);
+  cursor: pointer;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s;
+}
+
+.modal-close:hover { background: #e5e5e7; }
+
+.modal-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+}
+
+.modal-section {
+  margin-bottom: 16px;
+}
+
+.modal-section-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sub);
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.modal-section-title .unit {
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.modal-field-row {
+  display: flex;
+  gap: 6px;
+}
+
+.modal-field-row .text-input {
+  height: 36px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.modal-add-btn {
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+
+.modal-add-btn:hover { background: var(--accent-hover); }
+
+.modal-node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.modal-node-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.modal-node-item .node-name { flex: 1; font-weight: 500; }
+.modal-node-item .node-addr { color: var(--sub); font-size: 12px; }
+
+.modal-delete-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--danger);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s;
+}
+
+.modal-delete-btn:hover { background: rgba(255,59,48,.1); }
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

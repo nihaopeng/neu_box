@@ -25,6 +25,7 @@
     <div class="section-label">
       节点 <span class="unit" id="nodeCount"></span>
       <button class="refresh-btn" id="refreshBtn" title="手动刷新节点状态" aria-label="刷新节点">↻</button>
+      <button class="refresh-btn" id="manageNodesBtn" title="管理节点" aria-label="管理节点" style="font-size:14px">⚙</button>
     </div>
     <div class="node-list" id="nodeList">
       <div class="node-card node-card-loading">
@@ -152,6 +153,35 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- ═══ 节点管理弹窗 ═══ -->
+<div class="modal-overlay" id="manageModal" style="display:none">
+  <div class="modal-card">
+    <div class="modal-header">
+      <span>管理节点</span>
+      <button class="modal-close" id="modalClose" title="关闭">×</button>
+    </div>
+    <div class="modal-body">
+      <!-- 添加新节点 -->
+      <div class="modal-section">
+        <div class="modal-section-title">添加节点</div>
+        <div class="modal-field-row">
+          <input type="text" class="text-input" id="newNodeName" placeholder="名称" style="flex:2">
+          <input type="text" class="text-input" id="newNodeHost" placeholder="host" style="flex:2">
+          <input type="text" class="text-input" id="newNodePort" placeholder="端口" inputmode="numeric" style="flex:1">
+          <button class="modal-add-btn" id="addNodeBtn">添加</button>
+        </div>
+      </div>
+      <!-- 当前节点列表 -->
+      <div class="modal-section">
+        <div class="modal-section-title">已配置节点 <span class="unit" id="configNodeCount"></span></div>
+        <div class="modal-node-list" id="configNodeList">
+          <div style="color:var(--sub);font-size:13px;text-align:center;padding:12px">加载中…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script src="/static/js/app.js"></script>
 </body>

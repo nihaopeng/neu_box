@@ -83,6 +83,10 @@ class Nodes_Pool:
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return []
 
+    def sync_from_config(self):
+        """公开方法：主动从 config.json 同步节点（供 API 调用）。"""
+        self._sync_nodes_from_config()
+
     def _sync_nodes_from_config(self):
         """从 config.json 同步节点：按 name 去重，已存在的保留 node_id，不存在的删除。"""
         nodes_cfg = self._read_config_file()

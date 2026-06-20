@@ -536,11 +536,19 @@ queueRefreshBtn.addEventListener('click', () => {
 // ═══════════════════════════════════════════════════════════════
 
 async function viewTaskLog(taskId) {
-  if (!state.selectedNodeId || !state.cmdUserId) return;
+  if (!state.selectedNodeId) return;
 
   // 自动切换到命令模式
   if (state.mode !== 'command') {
     switchMode('command');
+  }
+
+  // 未填写用户标识
+  if (!state.cmdUserId) {
+    logPlaceholder.style.display = 'none';
+    logContent.style.display = '';
+    logContent.innerHTML = '<div style="color:#ff5f57;font-size:16px;text-align:center;padding:40px">🔒 需要用户标识<br><span style="font-size:13px;color:#8e8e93">请在左侧填写"用户标识"后重试</span></div>';
+    return;
   }
 
   const password = cmdPasswordEl.value;
@@ -753,6 +761,132 @@ async function submitCommand() {
     submitBtn.textContent = '提交命令';
   }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Node management modal
+// ═══════════════════════════════════════════════════════════════
+
+const manageModal    = document.getElementById('manageModal');
+const manageNodesBtn = document.getElementById('manageNodesBtn');
+const modalClose     = document.getElementById('modalClose');
+const configNodeList = document.getElementById('configNodeList');
+const configNodeCount = document.getElementById('configNodeCount');
+const newNodeName    = document.getElementById('newNodeName');
+const newNodeHost    = document.getElementById('newNodeHost');
+const newNodePort    = document.getElementById('newNodePort');
+const addNodeBtn     = document.getElementById('addNodeBtn');
+
+function openManageModal() {
+  manageModal.style.display = '';
+  fetchConfigNodes();
+}
+
+function closeManageModal() {
+  manageModal.style.display = 'none';
+}
+
+manageNodesBtn.addEventListener('click', openManageModal);
+modalClose.addEventListener('click', closeManageModal);
+manageModal.addEventListener('click', (e) => {
+  if (e.target === manageModal) closeManageModal();
+});
+
+async function fetchConfigNodes() {
+  try {
+    const resp = await fetch('/nodes/config');
+    const data = await resp.json();
+    const nodes = data.nodes || [];
+    configNodeCount.textContent = `${nodes.length} 个`;
+    renderConfigNodes(nodes);
+  } catch (err) {
+    configNodeList.innerHTML = `<div style="color:var(--danger);font-size:13px;text-align:center;padding:12px">加载失败: ${err.message}</div>`;
+  }
+}
+
+function renderConfigNodes(nodes) {
+  if (nodes.length === 0) {
+    configNodeList.innerHTML = '<div style="color:var(--sub);font-size:13px;text-align:center;padding:12px">无已配置节点</div>';
+    return;
+  }
+  configNodeList.innerHTML = nodes.map(n => `
+    <div class="modal-node-item">
+      <span class="node-name">${escapeHtml(n.name)}</span>
+      <span class="node-addr">${escapeHtml(n.host)}:${n.port}</span>
+      <button class="modal-delete-btn" data-name="${escapeHtml(n.name)}" title="删除节点">×</button>
+    </div>
+  `).join('');
+
+  configNodeList.querySelectorAll('.modal-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`确定要删除节点 "${name}" 吗？`)) return;
+      await removeConfigNode(name);
+    });
+  });
+}
+
+async function addConfigNode() {
+  const name = newNodeName.value.trim();
+  const host = newNodeHost.value.trim();
+  const port = parseInt(newNodePort.value.trim(), 10);
+
+  if (!name) { showToast('请输入节点名称', 'error'); return; }
+  if (!host) { showToast('请输入 host', 'error'); return; }
+  if (isNaN(port) || port < 1 || port > 65535) { showToast('端口必须在 1-65535 之间', 'error'); return; }
+
+  addNodeBtn.disabled = true;
+  addNodeBtn.textContent = '…';
+
+  try {
+    const resp = await fetch('/nodes/config/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, host, port }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      showToast(data.message, 'success');
+      newNodeName.value = '';
+      newNodeHost.value = '';
+      newNodePort.value = '';
+      fetchConfigNodes();
+      fetchNodes(); // 刷新主节点列表
+    } else {
+      showToast(data.error || '添加失败', 'error');
+    }
+  } catch (err) {
+    showToast('网络错误: ' + err.message, 'error');
+  } finally {
+    addNodeBtn.disabled = false;
+    addNodeBtn.textContent = '添加';
+  }
+}
+
+async function removeConfigNode(name) {
+  try {
+    const resp = await fetch('/nodes/config/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      showToast(data.message, 'success');
+      fetchConfigNodes();
+      fetchNodes(); // 刷新主节点列表
+    } else {
+      showToast(data.error || '删除失败', 'error');
+    }
+  } catch (err) {
+    showToast('网络错误: ' + err.message, 'error');
+  }
+}
+
+addNodeBtn.addEventListener('click', addConfigNode);
+// Enter key in port field triggers add
+newNodePort.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') addConfigNode();
+});
 
 // ═══════════════════════════════════════════════════════════════
 // Init
