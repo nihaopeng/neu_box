@@ -44,6 +44,29 @@ def run():
         return {'error': str(e)}, 404
 
 
+@command_bp.route('/tasks/delete', methods=['POST'])
+def delete_tasks():
+    """批量删除任务，转发到指定 Worker。
+
+    Body: { "node_id": "...", "task_ids": [...] }
+    """
+    data = request.get_json(silent=True) or {}
+    node_id = (data.get('node_id') or '').strip()
+    if not node_id:
+        return {'error': 'node_id 不能为空'}, 400
+
+    task_ids = data.get('task_ids') or []
+    if not task_ids:
+        return {'error': 'task_ids 不能为空'}, 400
+
+    try:
+        resp = Nodes_Pool.get_nodes_pool().forward_to_node(
+            node_id, '/command/tasks/delete', {'task_ids': task_ids})
+        return resp.json(), resp.status_code
+    except ValueError as e:
+        return {'error': str(e)}, 404
+
+
 @command_bp.route('/queue', methods=['GET'])
 def queue():
     """查看指定 Worker 上的任务队列。

@@ -16,6 +16,30 @@
   flex-shrink: 0;
 }
 
+/* ── Batch bar ─────────────────────────────────────────────── */
+
+.queue-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 14px;
+  background: rgba(0,113,227,.06);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+/* ── Queue item checkbox ───────────────────────────────────── */
+
+.queue-check {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
 .queue-list {
   flex: 1;
   overflow-y: auto;

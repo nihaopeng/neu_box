@@ -269,6 +269,9 @@ class Nodes_Pool:
                 timeout=timeout,
             )
             logger.debug('转发 → %s %s 状态 %s', node_id, endpoint, resp.status_code)
+            if not resp.ok:
+                detail = resp.text[:200] if resp.text else f'HTTP {resp.status_code}'
+                raise ValueError(f'Worker 返回错误: {detail}')
             return resp
         except requests.RequestException as e:
             raise ValueError(f'无法连接节点 {node_id}: {e}')
@@ -296,6 +299,9 @@ class Nodes_Pool:
                 timeout=timeout,
             )
             logger.debug('GET → %s %s 状态 %s', node_id, endpoint, resp.status_code)
+            if not resp.ok:
+                detail = resp.text[:200] if resp.text else f'HTTP {resp.status_code}'
+                raise ValueError(f'Worker 返回错误: {detail}')
             return resp
         except requests.RequestException as e:
             raise ValueError(f'无法连接节点 {node_id}: {e}')

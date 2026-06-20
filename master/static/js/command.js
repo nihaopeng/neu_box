@@ -7,15 +7,14 @@ function renderQueue(data) {
   const queue = data.queue || [];
   if (queue.length === 0) {
     queueList.innerHTML = '<div class="queue-empty">队列为空</div>';
+    queueBatchBar.style.display = 'none';
     return;
   }
 
   queueList.innerHTML = queue.map(task => {
     const isRunning = task.status === 'running';
     const posText = isRunning ? '▶' : (task.position || '?');
-    // const isOwn = state.cmdUserId && task.user_id === state.cmdUserId;
     const isDone = task.status === 'completed' || task.status === 'failed';
-    // const clickable = isOwn && isDone;
     const clickable = isDone;
 
     return `
@@ -23,6 +22,7 @@ function renderQueue(data) {
            data-task-id="${task.task_id}"
            data-user-id="${escapeHtml(task.user_id)}"
            title="${clickable ? '点击查看日志' : ''}">
+        <input type="checkbox" class="queue-check" data-task-id="${task.task_id}" title="选择">
         <span class="queue-pos">${posText}</span>
         <span class="queue-user" title="${escapeHtml(task.user_id)}">${escapeHtml(task.user_id)}</span>
         <span class="queue-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</span>
@@ -30,14 +30,79 @@ function renderQueue(data) {
       </div>`;
   }).join('');
 
-  // Bind click: only own + completed/failed → view log
+  // Bind click: only completed/failed → view log (ignore clicks on checkbox)
   queueList.querySelectorAll('.queue-item.clickable').forEach(item => {
-    item.addEventListener('click', () => {
+    item.addEventListener('click', (e) => {
+      if (e.target.classList.contains('queue-check')) return;
       const taskId = item.dataset.taskId;
       if (taskId) viewTaskLog(taskId);
     });
   });
+
+  // Checkbox change → update batch bar
+  queueList.querySelectorAll('.queue-check').forEach(cb => {
+    cb.addEventListener('change', updateBatchBar);
+    // Stop propagation so clicking checkbox doesn't trigger viewTaskLog
+    cb.addEventListener('click', e => e.stopPropagation());
+  });
+
+  // Select-all
+  const selectAllCb = document.getElementById('queueSelectAll');
+  if (selectAllCb) selectAllCb.checked = false;
+  queueBatchBar.style.display = 'none';
 }
+
+function getCheckedTaskIds() {
+  const checked = queueList.querySelectorAll('.queue-check:checked');
+  return Array.from(checked).map(cb => cb.dataset.taskId);
+}
+
+function updateBatchBar() {
+  const count = getCheckedTaskIds().length;
+  const selectAllCb = document.getElementById('queueSelectAll');
+  const countEl = document.getElementById('queueBatchCount');
+  if (count > 0) {
+    queueBatchBar.style.display = '';
+    if (countEl) countEl.textContent = `已选 ${count} 项`;
+    // Update select-all state
+    const allCbs = queueList.querySelectorAll('.queue-check');
+    if (selectAllCb) selectAllCb.checked = (count === allCbs.length);
+  } else {
+    queueBatchBar.style.display = 'none';
+    if (selectAllCb) selectAllCb.checked = false;
+  }
+}
+
+document.getElementById('queueSelectAll').addEventListener('change', function() {
+  const checked = this.checked;
+  queueList.querySelectorAll('.queue-check').forEach(cb => {
+    cb.checked = checked;
+  });
+  updateBatchBar();
+});
+
+document.getElementById('queueBatchDeleteBtn').addEventListener('click', async () => {
+  const ids = getCheckedTaskIds();
+  if (ids.length === 0) return;
+  if (!confirm(`确定删除 ${ids.length} 个任务吗？正在运行的任务不会被删除。`)) return;
+
+  try {
+    const resp = await fetch('/command/tasks/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node_id: state.selectedNodeId, task_ids: ids }),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      showToast(data.message || `已删除`, 'success');
+      fetchQueue();
+    } else {
+      showToast(data.error || '删除失败', 'error');
+    }
+  } catch (err) {
+    showToast('网络错误: ' + err.message, 'error');
+  }
+});
 
 function statusLabel(s) {
   const map = { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败' };
@@ -47,6 +112,7 @@ function statusLabel(s) {
 async function fetchQueue() {
   if (!state.selectedNodeId) {
     queueList.innerHTML = '<div class="queue-empty">选择节点后刷新</div>';
+    queueBatchBar.style.display = 'none';
     return;
   }
 
@@ -57,6 +123,7 @@ async function fetchQueue() {
     renderQueue(data);
   } catch (err) {
     queueList.innerHTML = `<div class="queue-empty">加载失败: ${err.message}</div>`;
+    queueBatchBar.style.display = 'none';
   }
 }
 

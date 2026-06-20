@@ -45,6 +45,8 @@ const cmdInputEl        = document.getElementById('cmdInput');
 // Queue
 const queueList         = document.getElementById('queueList');
 const queueRefreshBtn   = document.getElementById('queueRefreshBtn');
+const queueBatchBar     = document.getElementById('queueBatchBar');
+const queueBatchDeleteBtn = document.getElementById('queueBatchDeleteBtn');
 
 // Experiment (shared refs)
 const logActions        = document.getElementById('logActions');

@@ -319,6 +319,26 @@ class TaskQueue:
         all_tasks = active + [t for t in recent if t['task_id'] not in active_ids]
         return [self._format_public(t) for t in all_tasks]
 
+    def delete_tasks(self, task_ids: list[str]) -> int:
+        """批量删除任务。正在运行的任务不会被删除。
+        返回实际删除的数量。"""
+        deleted = 0
+        for tid in task_ids:
+            # 不删除正在运行的任务
+            if tid in self._pending:
+                del self._pending[tid]
+                self._db.delete_task(tid)
+                deleted += 1
+            elif self._running and self._running.get('task_id') == tid:
+                continue  # running, skip
+            else:
+                self._db.delete_task(tid)
+                deleted += 1
+        if deleted > 0:
+            self._reindex()
+            logger.info('批量删除 %s 个任务', deleted)
+        return deleted
+
     def get_result(self, task_id: str) -> dict | None:
         """获取任务结果。user_id 仅作归属标记，不校验密码。
 
@@ -522,6 +542,23 @@ def run_command():
         'position': position,
         'message': f'任务已提交，队列位置 #{position}',
     }, 202
+
+
+@command_bp.route('/tasks/delete', methods=['POST'])
+def delete_tasks():
+    """批量删除任务。正在运行的任务不会被删除。
+
+    Body: { "task_ids": ["id1", "id2", ...] }
+    响应: { "deleted": N }
+    """
+    data = request.get_json(silent=True) or {}
+    task_ids = data.get('task_ids') or []
+    if not task_ids:
+        return {'error': 'task_ids 不能为空'}, 400
+
+    tq = TaskQueue.get_instance()
+    deleted = tq.delete_tasks(task_ids)
+    return {'deleted': deleted, 'message': f'已删除 {deleted} 个任务'}, 200
 
 
 @command_bp.route('/queue', methods=['GET'])
