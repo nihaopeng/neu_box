@@ -4,7 +4,7 @@
 import sys
 import time
 from common import (
-    get, post, assert_ok, assert_gt, run_tests, get_gpunode_id,
+    get, get_npunode_id, post, assert_ok, assert_gt, run_tests, get_gpunode_id,
 )
 
 QUICK = "--quick" in sys.argv
@@ -19,7 +19,8 @@ TEST_USERS      = ["pengyt", "lipz"]
 
 def test_concurrency():
     """有限 GPU 资源下并发不超过可用数。"""
-    gpu_id = get_gpunode_id()
+    # gpu_id = get_gpunode_id()
+    gpu_id = get_npunode_id()
 
     _, nodes = post("/nodes/get_all_nodes", {})
     gpunode = next((n for n in nodes["nodes"] if n["node_id"] == gpu_id), {})

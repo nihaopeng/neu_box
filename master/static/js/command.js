@@ -84,7 +84,7 @@ document.getElementById('queueSelectAll').addEventListener('change', function() 
 document.getElementById('queueBatchDeleteBtn').addEventListener('click', async () => {
   const ids = getCheckedTaskIds();
   if (ids.length === 0) return;
-  if (!confirm(`确定删除 ${ids.length} 个任务吗？正在运行的任务不会被删除。`)) return;
+  if (!confirm(`确定删除 ${ids.length} 个任务吗？（运行中的任务将被强制终止）`)) return;
 
   try {
     const resp = await fetch('/command/tasks/delete', {
