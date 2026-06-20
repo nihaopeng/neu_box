@@ -83,15 +83,22 @@ def create():
         process = subprocess.Popen(
             ttyd_cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
 
         # 4. 稍微等待，确保没秒退
-        time.sleep(0.1)
+        time.sleep(0.5)
         if process.poll() is not None:
-            # 如果启动失败，立刻归还端口
+            # 如果启动失败，读取 stderr 获取真实错误原因
+            stderr_output = ''
+            try:
+                stderr_output = process.stderr.read().decode('utf-8', errors='replace').strip()
+            except Exception:
+                pass
             Port_Pool_Manager.get_Port_Pool_Manager().release_port(port)
-            return {'error': '终端启动失败', 'details': 'ttyd 异常退出'}, 500
+            detail = stderr_output or f'ttyd 异常退出 (exit code={process.returncode})'
+            logger.error('ttyd 启动失败: %s', detail)
+            return {'error': '终端启动失败', 'details': detail}, 500
 
         # 5. 分配沙盒并加入 ttyd 进程
         sbx = SbxManager.get_instance()

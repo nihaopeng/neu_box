@@ -61,9 +61,11 @@ async function submitTerminal() {
       resultDiv.style.display = 'block';
       fetchNodes();
     } else {
-      showToast(data.error || '申请失败', 'error');
+      const errMsg = data.error || '申请失败';
+      const errDetail = data.details ? `<br><span style="font-size:12px;color:#8e8e93">${escapeHtml(data.details)}</span>` : '';
+      showToast(errMsg, 'error');
       resultDiv.className = 'result error';
-      resultDiv.innerHTML = `<strong>✗ 申请失败</strong><br>${escapeHtml(data.error || '未知错误')}`;
+      resultDiv.innerHTML = `<strong>✗ ${escapeHtml(errMsg)}</strong>${errDetail}`;
       resultDiv.style.display = 'block';
     }
   } catch (err) {

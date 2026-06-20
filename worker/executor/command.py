@@ -272,7 +272,7 @@ class TaskQueue:
 
     def submit(self, user_id: str, command: str,
                cpu: int = 0, mem: str = "0",
-               device_num: int = 0, password: str = '') -> str:
+               device_num: int = 0) -> str:
         """提交任务到队列，返回 task_id。user_id 即系统用户名。
         设备分配推迟到执行时，提交时只记录需求数量。"""
         task_id = uuid.uuid4().hex[:12]
@@ -280,7 +280,7 @@ class TaskQueue:
         # 持久化到 DB
         self._db.insert_task(
             task_id=task_id, user_id=user_id, command=command,
-            cpu=cpu, mem=mem, devices=[], password=password)
+            cpu=cpu, mem=mem, devices=[])
 
         task = {
             'task_id': task_id,
@@ -539,18 +539,10 @@ def get_queue():
 
 @command_bp.route('/result/<task_id>', methods=['GET'])
 def get_result(task_id: str):
-    """查看某个任务的完整结果。需要 user_id 参数做权限校验。
+    """查看某个任务的完整结果。无需权限校验，所有用户均可查看。
 
-    Query: ?user_id=xxx
-    只有本人能看到日志输出。
-
-    响应: 任务完整信息（含 stdout/stderr 当 user_id 匹配时）
+    响应: 任务完整信息（含 stdout/stderr）
     """
-    user_id = (request.args.get('user_id') or '').strip()
-    # password = request.args.get('password') or ''
-    if not user_id:
-        return {'error': 'user_id 参数必填'}, 400
-
     tq = TaskQueue.get_instance()
     result = tq.get_result(task_id)
 

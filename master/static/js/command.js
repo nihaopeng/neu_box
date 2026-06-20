@@ -13,9 +13,10 @@ function renderQueue(data) {
   queueList.innerHTML = queue.map(task => {
     const isRunning = task.status === 'running';
     const posText = isRunning ? '▶' : (task.position || '?');
-    const isOwn = state.cmdUserId && task.user_id === state.cmdUserId;
+    // const isOwn = state.cmdUserId && task.user_id === state.cmdUserId;
     const isDone = task.status === 'completed' || task.status === 'failed';
-    const clickable = isOwn && isDone;
+    // const clickable = isOwn && isDone;
+    const clickable = isDone;
 
     return `
       <div class="queue-item ${isRunning ? 'running' : ''} ${clickable ? 'clickable' : ''}"
@@ -79,15 +80,6 @@ async function viewTaskLog(taskId) {
     switchMode('command');
   }
 
-  // 未填写用户标识
-  if (!state.cmdUserId) {
-    logPlaceholder.style.display = 'none';
-    logContent.style.display = '';
-    logContent.innerHTML = '<div style="color:#ff5f57;font-size:16px;text-align:center;padding:40px">🔒 需要用户标识<br><span style="font-size:13px;color:#8e8e93">请在左侧填写"用户标识"后重试</span></div>';
-    logActions.style.display = 'none';
-    return;
-  }
-
   logPlaceholder.style.display = 'none';
   logContent.style.display = '';
   logContent.innerHTML = '<div style="color:#636366">加载中…</div>';
@@ -96,7 +88,6 @@ async function viewTaskLog(taskId) {
   try {
     const params = new URLSearchParams({
       node_id: state.selectedNodeId,
-      user_id: state.cmdUserId,
     });
     const resp = await fetch(`/command/result/${taskId}?${params}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

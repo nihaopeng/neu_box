@@ -63,7 +63,7 @@ def queue():
 
 @command_bp.route('/result/<task_id>', methods=['GET'])
 def result(task_id: str):
-    """查看任务结果。
+    """查看任务结果，无需权限校验。
 
     Query: ?node_id=xxx
     """
@@ -74,8 +74,7 @@ def result(task_id: str):
 
     try:
         resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(
-            node_id, f'/command/result/{task_id}',
-            params={'user_id': request.args.get('user_id', '')})
+            node_id, f'/command/result/{task_id}')
         return resp.json(), resp.status_code
     except ValueError as e:
         return {'error': str(e)}, 404
