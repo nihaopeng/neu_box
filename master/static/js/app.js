@@ -2,7 +2,7 @@
 // State
 // ═══════════════════════════════════════════════════════════════
 const state = {
-  mode:       'terminal',       // 'terminal' | 'command'
+  mode:       null,            // set by switchMode on init
   selectedNodeId: null,
   cpu:        0,
   memory:     0,
@@ -624,4 +624,7 @@ addNodeBtn.addEventListener('click', addConfigNode);
 newNodePort.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') addConfigNode();
 });
+
+// Init UI to default mode
+switchMode('command');
 
