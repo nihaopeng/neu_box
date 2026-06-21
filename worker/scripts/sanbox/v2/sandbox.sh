@@ -10,6 +10,7 @@
 #   sudo ./sandbox.sh join   <name> <PID>
 #   sudo ./sandbox.sh status <name>
 #   sudo ./sandbox.sh destroy <name>
+#   sudo ./sandbox.sh list
 #   sudo ./sandbox.sh cleanup
 #
 #   cpu: 核数 (0=不限)    mem: 如 512M / 2G / 0
@@ -371,6 +372,20 @@ cmd_destroy() {
     echo "✓ 沙盒 '${name}' 已销毁"
 }
 
+cmd_list() {
+    local found=false
+    for d in "${CGROUP_ROOT}"/${PREFIX}*/; do
+        [ -d "$d" ] || continue
+        found=true
+        local name="${d##*/${PREFIX}}"
+        name="${name%/}"
+        echo "$name"
+    done
+    if ! $found; then
+        echo "(无)"
+    fi
+}
+
 cmd_cleanup() {
     echo "=== 完全清理 ==="
     for d in "${CGROUP_ROOT}"/${PREFIX}*/; do
@@ -404,11 +419,12 @@ case "${1:-}" in
     join)    cmd_join    "${2:-}" "${3:-}" ;;
     status)  cmd_status  "${2:-}" ;;
     destroy) cmd_destroy "${2:-}" ;;
+    list)    cmd_list ;;
     cleanup) cmd_cleanup ;;
     *)
         echo "cgroup 版本: v${CGROUP_VER}"
         echo ""
-        echo "用法: $0 {create|join|status|destroy|cleanup} [args...]"
+        echo "用法: $0 {create|join|status|destroy|list|cleanup} [args...]"
         echo ""
         echo "  create <name> <cpu> <mem> [major:minor ...]"
         echo "          cpu  = CPU 核数 (0=不限)"
@@ -417,6 +433,7 @@ case "${1:-}" in
         echo "  join    <name> <PID>"
         echo "  status  <name>"
         echo "  destroy <name>"
+        echo "  list"
         echo "  cleanup"
         ;;
 esac

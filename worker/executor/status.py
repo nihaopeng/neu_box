@@ -65,15 +65,12 @@ class Node_Manager:
     # ── 活跃沙盒 ──────────────────────────────────────────────
 
     def active_sandbox_count(self) -> int:
-        """统计当前 ttyd 进程数作为活跃沙盒数。"""
-        count = 0
-        for proc in psutil.process_iter(['name']):
-            try:
-                if proc.info['name'] and 'ttyd' in proc.info['name']:
-                    count += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        return count
+        """统计 cgroup 中实际存在的沙盒数量（通过 sandbox.sh list）。"""
+        try:
+            from executor.sbx_manager import SbxManager
+            return len(SbxManager.get_instance().list_sandboxes_via_script())
+        except Exception:
+            return 0
 
     # ── 汇总 ──────────────────────────────────────────────────
 

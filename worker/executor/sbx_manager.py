@@ -261,6 +261,15 @@ class SbxManager:
         """列出 DB 中所有沙盒名称。"""
         return self._list_sandbox_names()
 
+    def list_sandboxes_via_script(self) -> List[str]:
+        """通过 sandbox.sh list 获取 cgroup 中实际存在的沙盒名称列表。"""
+        result = self._run_script('list')
+        if result.returncode != 0:
+            logger.error("sandbox.sh list 失败: %s", result.stderr.strip())
+            return []
+        names = [n for n in result.stdout.strip().split('\n') if n and n != '(无)']
+        return names
+
     # ── 终端专用 ─────────────────────────────────────────────────
 
     def allocate_for_terminal(self, terminal_id: str,
