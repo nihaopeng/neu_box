@@ -316,6 +316,10 @@ async function fetchNodes() {
 
     renderNodeCards(nodes);
     updateSubmitBtn();
+    // 首次加载自动选中第一个节点时也刷新任务队列
+    if (state.selectedNodeId) {
+      fetchQueue();
+    }
 
   } catch (err) {
     nodeList.innerHTML = `
