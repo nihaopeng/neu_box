@@ -1,5 +1,5 @@
-"""Worker 节点状态上报 — 查询本机 CPU/内存/GPU/NPU 资源及活跃沙盒。
-设备信息（GPU/NPU）由独立的 shell 脚本采集并输出 JSON，实现解耦。
+"""Worker 节点状态上报 — 查询本机 CPU/内存/设备资源及活跃沙盒。
+设备信息由独立脚本采集并输出 JSON，实现解耦。
 """
 
 import json
@@ -43,24 +43,28 @@ class Node_Manager:
 
     # ── 设备信息（由独立脚本采集） ─────────────────────────────
 
-    def _run_device_script(self,path) -> dict:
-        """执行 scripts/<name>.sh，解析其 JSON 输出。失败返回全 0。"""
+    def device_info(self) -> dict:
+        """调用 dev_info_script_path 脚本，返回 {"total": N, "idle": N}。
+
+        脚本自行处理 GPU/NPU/其他设备的汇总逻辑，失败返回全 0。
+        """
+        path = os.getenv('dev_info_script_path', '')
+        if not path:
+            return {'total': 0, 'idle': 0}
         try:
             out = subprocess.check_output(
                 [path],
                 timeout=10,
                 stderr=subprocess.DEVNULL,
             )
-            return json.loads(out.decode())
+            data = json.loads(out.decode())
+            return {
+                'total': data.get('total', 0),
+                'idle': data.get('idle', 0),
+            }
         except (FileNotFoundError, subprocess.CalledProcessError,
                 subprocess.TimeoutExpired, json.JSONDecodeError):
             return {'total': 0, 'idle': 0}
-
-    def gpu_info(self) -> dict:
-        return self._run_device_script(os.getenv('gpu_info_script_path'))
-
-    def npu_info(self) -> dict:
-        return self._run_device_script(os.getenv('npu_info_script_path'))
 
     # ── 活跃沙盒 ──────────────────────────────────────────────
 
@@ -78,8 +82,7 @@ class Node_Manager:
         """汇总本节点完整资源状态。"""
         total_cpu, idle_cpu = self.cpu_info()
         total_mem, idle_mem = self.mem_info()
-        gpu = self.gpu_info()
-        npu = self.npu_info()
+        dev = self.device_info()
         sandboxes = self.active_sandbox_count()
 
         return {
@@ -88,8 +91,8 @@ class Node_Manager:
             'idle_cpu': round(idle_cpu, 1),
             'total_mem': total_mem,
             'idle_mem': idle_mem,
-            'total_devices': gpu['total'] + npu['total'],
-            'idle_devices': gpu['idle'] + npu['idle'],
+            'total_devices': dev['total'],
+            'idle_devices': dev['idle'],
             'active_sandboxes': sandboxes,
         }
 

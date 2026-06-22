@@ -61,11 +61,22 @@ class Database:
                 blocks      TEXT    DEFAULT '[]',
                 tags        TEXT    DEFAULT '[]',
                 created_by  TEXT    DEFAULT '',
+                folder_id   TEXT    DEFAULT NULL,
                 created_at  REAL,
-                updated_at  REAL
+                updated_at  REAL,
+                FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
             );
             CREATE INDEX IF NOT EXISTS idx_exp_created    ON experiments(created_at);
             CREATE INDEX IF NOT EXISTS idx_exp_created_by ON experiments(created_by);
+
+            CREATE TABLE IF NOT EXISTS folders (
+                id          TEXT PRIMARY KEY,
+                name        TEXT    NOT NULL,
+                parent_id   TEXT    DEFAULT NULL,
+                created_at  REAL,
+                FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(parent_id);
         ''')
 
         # 迁移旧字段 → blocks（如有旧数据）
@@ -141,6 +152,19 @@ class Database:
         except sqlite3.OperationalError:
             pass
 
+        # 迁移：添加 folder_id 列到 experiments
+        try:
+            conn.execute("ALTER TABLE experiments ADD COLUMN folder_id TEXT DEFAULT NULL "
+                         "REFERENCES folders(id) ON DELETE SET NULL")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+
+        # 迁移：创建 folder_id 索引（在添加列之后）
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_folder ON experiments(folder_id)")
+        except sqlite3.OperationalError:
+            pass
+
         conn.commit()
 
     # ═══════════════════════════════════════════════════════════
@@ -149,22 +173,22 @@ class Database:
 
     def create_experiment(self, title: str, blocks: list = None,
                           tags: list = None, created_by: str = '',
-                          exp_id: str = None) -> str:
+                          folder_id: str = None, exp_id: str = None) -> str:
         conn = self._get_conn()
         exp_id = exp_id or uuid.uuid4().hex[:12]
         now = time.time()
         conn.execute(
-            'INSERT INTO experiments (id, title, blocks, tags, created_by, created_at, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO experiments (id, title, blocks, tags, created_by, folder_id, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             (exp_id, title,
              json.dumps(blocks or [], ensure_ascii=False),
              json.dumps(tags or [], ensure_ascii=False),
-             created_by, now, now))
+             created_by, folder_id, now, now))
         conn.commit()
         return exp_id
 
     def update_experiment(self, exp_id: str, **fields) -> bool:
-        allowed = {'title', 'blocks', 'tags'}
+        allowed = {'title', 'blocks', 'tags', 'folder_id'}
         conn = self._get_conn()
         updates = {}
         for k in allowed:
@@ -195,7 +219,8 @@ class Database:
         return self._row_to_dict(row) if row else None
 
     def list_experiments(self, search: str = '', tag: str = '',
-                         created_by: str = '', limit: int = 100) -> list[dict]:
+                         created_by: str = '', folder_id: str = None,
+                         limit: int = 100) -> list[dict]:
         conn = self._get_conn()
         conditions = []
         params = []
@@ -209,8 +234,15 @@ class Database:
         if created_by:
             conditions.append('created_by = ?')
             params.append(created_by)
+        if folder_id is not None:
+            # 包含子文件夹中的实验
+            children = self._get_folder_descendants(folder_id)
+            all_ids = [folder_id] + children
+            placeholders = ','.join('?' for _ in all_ids)
+            conditions.append(f'folder_id IN ({placeholders})')
+            params.extend(all_ids)
         where = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
-        query = f'SELECT * FROM experiments {where} ORDER BY updated_at DESC LIMIT ?'
+        query = f'SELECT * FROM experiments {where} ORDER BY created_at DESC LIMIT ?'
         params.append(limit)
         return [self._row_to_dict(r) for r in conn.execute(query, params).fetchall()]
 
@@ -224,3 +256,92 @@ class Database:
                 except (json.JSONDecodeError, TypeError):
                     d[key] = [] if key == 'tags' else []
         return d
+
+    # ═══════════════════════════════════════════════════════════
+    # Folders CRUD
+    # ═══════════════════════════════════════════════════════════
+
+    def _get_folder_descendants(self, folder_id: str) -> list:
+        """递归获取某文件夹下所有子文件夹 ID。"""
+        conn = self._get_conn()
+        result = []
+        stack = [folder_id]
+        while stack:
+            rows = conn.execute(
+                'SELECT id FROM folders WHERE parent_id IN ({})'.format(
+                    ','.join('?' for _ in stack)),
+                stack).fetchall()
+            stack = [r['id'] for r in rows]
+            result.extend(stack)
+        return result
+
+    def create_folder(self, name: str, parent_id: str = None) -> str:
+        conn = self._get_conn()
+        fid = uuid.uuid4().hex[:8]
+        now = time.time()
+        conn.execute(
+            'INSERT INTO folders (id, name, parent_id, created_at) VALUES (?, ?, ?, ?)',
+            (fid, name, parent_id, now))
+        conn.commit()
+        return fid
+
+    def get_folder_tree(self) -> list:
+        """返回所有文件夹列表，每个含 id/name/parent_id/children/exp_count。"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            'SELECT f.*, (SELECT COUNT(*) FROM experiments e '
+            'WHERE e.folder_id = f.id) AS exp_count '
+            'FROM folders f ORDER BY f.name ASC'
+        ).fetchall()
+        folders = [dict(r) for r in rows]
+        # 构建树
+        node_map = {f['id']: {**f, 'children': []} for f in folders}
+        tree = []
+        for f in folders:
+            node = node_map[f['id']]
+            if f['parent_id'] and f['parent_id'] in node_map:
+                node_map[f['parent_id']]['children'].append(node)
+            else:
+                tree.append(node)
+        # 递归聚合子文件夹的实验数
+        def _agg(n):
+            total = n.get('exp_count', 0) or 0
+            for c in n['children']:
+                total += _agg(c)
+            n['total_exp_count'] = total
+            return total
+        for n in tree:
+            _agg(n)
+        return tree
+
+    def rename_folder(self, fid: str, name: str) -> bool:
+        conn = self._get_conn()
+        conn.execute('UPDATE folders SET name=? WHERE id=?', (name, fid))
+        conn.commit()
+        return True
+
+    def move_folder(self, fid: str, new_parent_id: str = None) -> bool:
+        """移动文件夹到新父节点（不可是自己的子孙节点）。"""
+        if new_parent_id and new_parent_id in self._get_folder_descendants(fid):
+            return False  # 防止循环引用
+        conn = self._get_conn()
+        conn.execute('UPDATE folders SET parent_id=? WHERE id=?',
+                     (new_parent_id, fid))
+        conn.commit()
+        return True
+
+    def delete_folder(self, fid: str) -> bool:
+        """删除文件夹：子文件夹上移，实验 folder_id 置空。"""
+        conn = self._get_conn()
+        folder = conn.execute('SELECT * FROM folders WHERE id=?', (fid,)).fetchone()
+        if not folder:
+            return False
+        # 子文件夹上移
+        conn.execute('UPDATE folders SET parent_id=? WHERE parent_id=?',
+                     (folder['parent_id'], fid))
+        # 实验移到父文件夹（或置空）
+        conn.execute('UPDATE experiments SET folder_id=? WHERE folder_id=?',
+                     (folder['parent_id'], fid))
+        conn.execute('DELETE FROM folders WHERE id=?', (fid,))
+        conn.commit()
+        return True

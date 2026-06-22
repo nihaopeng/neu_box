@@ -17,12 +17,21 @@ const expNodeId         = document.getElementById('expNodeId');
 const expCommand        = document.getElementById('expCommand');
 const expSaveBtn        = document.getElementById('expSaveBtn');
 const expDeleteBtn      = document.getElementById('expDeleteBtn');
+const expFolder         = document.getElementById('expFolder');
+const folderTree        = document.getElementById('folderTree');
 
 // ═══════════════════════════════════════════════════════════════
 // Notebook mode: 'preview' | 'edit'
 // ═══════════════════════════════════════════════════════════════
 
 let _notebookMode = 'preview';
+
+// ═══════════════════════════════════════════════════════════════
+// Folder state
+// ═══════════════════════════════════════════════════════════════
+
+let _currentFolderId = '';      // 当前选中的文件夹（'' = 全部）
+let _folderData = [];
 
 // ═══════════════════════════════════════════════════════════════
 // Experiment management
@@ -33,6 +42,7 @@ async function fetchExperiments() {
     const search = expSearchInput.value.trim();
     const params = new URLSearchParams();
     if (search) params.set('search', search);
+    if (_currentFolderId) params.set('folder_id', _currentFolderId);
     const resp = await fetch(`/experiments/?${params}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
@@ -40,6 +50,184 @@ async function fetchExperiments() {
   } catch (err) {
     experimentList.innerHTML = `<div class="queue-empty">加载失败: ${err.message}</div>`;
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Folder tree
+// ═══════════════════════════════════════════════════════════════
+
+async function fetchFolders() {
+  try {
+    const resp = await fetch('/experiments/folders');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    _folderData = data.folders || [];
+    renderFolderTree(_folderData);
+  } catch (err) {
+    // silently fail
+  }
+}
+
+function renderFolderTree(folders) {
+  let html = `<div class="folder-item${_currentFolderId === '' ? ' active' : ''}" data-folder-id="">
+    <span class="folder-name">📁 全部实验</span>
+    <span class="folder-actions" style="display:flex">
+      <button class="folder-act-btn" data-action="add-child" title="新建文件夹">＋</button>
+    </span>
+  </div>`;
+  for (const f of folders) {
+    html += _renderFolderNode(f, 0);
+  }
+  folderTree.innerHTML = html;
+}
+
+function _renderFolderNode(f, depth) {
+  const hasChildren = f.children && f.children.length > 0;
+  const isExpanded = _expandedFolders.has(f.id);
+  const count = f.total_exp_count || 0;
+  const isActive = _currentFolderId === f.id;
+
+  let html = `<div class="folder-item${hasChildren ? '' : ' no-children'}${isActive ? ' active' : ''}" data-folder-id="${f.id}">
+    <span class="folder-arrow${isExpanded ? ' expanded' : ''}">▶</span>
+    <span class="folder-name">📁 ${escapeHtml(f.name)}</span>
+    <span class="folder-count">${count}</span>
+    <span class="folder-actions">
+      <button class="folder-act-btn" data-action="add-child" title="新建子文件夹">＋</button>
+      <button class="folder-act-btn" data-action="rename" title="重命名">✎</button>
+      <button class="folder-act-btn" data-action="delete" title="删除">🗑</button>
+    </span>
+  </div>`;
+
+  if (hasChildren && isExpanded) {
+    html += '<div class="folder-children">';
+    for (const c of f.children) {
+      html += _renderFolderNode(c, depth + 1);
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+const _expandedFolders = new Set();
+
+async function selectFolder(folderId) {
+  _currentFolderId = folderId;
+  renderFolderTree(_folderData);
+  await fetchExperiments();
+}
+
+folderTree.addEventListener('click', async (e) => {
+  const item = e.target.closest('.folder-item');
+  if (!item) return;
+
+  const folderId = item.dataset.folderId;
+
+  // 操作按钮
+  const actBtn = e.target.closest('.folder-act-btn');
+  if (actBtn) {
+    e.stopPropagation();
+    const action = actBtn.dataset.action;
+    if (action === 'add-child') {
+      _startInlineCreate(item, folderId);
+    } else if (action === 'rename') {
+      _startInlineRename(item, folderId);
+    } else if (action === 'delete') {
+      if (!confirm('确定删除此文件夹？子文件夹会上移，实验会移到上级文件夹。')) return;
+      await fetch(`/experiments/folders/${encodeURIComponent(folderId)}`, { method: 'DELETE' });
+      await fetchFolders();
+      await fetchExperiments();
+    }
+    return;
+  }
+
+  // 折叠/展开
+  const arrow = item.querySelector('.folder-arrow');
+  if (arrow && e.target.closest('.folder-arrow') !== null && !item.classList.contains('no-children')) {
+    if (_expandedFolders.has(folderId)) {
+      _expandedFolders.delete(folderId);
+    } else {
+      _expandedFolders.add(folderId);
+    }
+    renderFolderTree(_folderData);
+    return;
+  }
+
+  // 选中
+  await selectFolder(folderId);
+});
+
+function _startInlineCreate(parentItem, parentId) {
+  const existing = parentItem.nextElementSibling;
+  if (existing && existing.classList.contains('folder-new-input-wrapper')) return;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'folder-new-input-wrapper';
+  wrapper.style.paddingLeft = '16px';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'folder-new-input';
+  input.placeholder = '新文件夹名称…';
+  wrapper.appendChild(input);
+
+  if (parentItem.nextSibling) {
+    parentItem.parentNode.insertBefore(wrapper, parentItem.nextSibling);
+  } else {
+    parentItem.parentNode.appendChild(wrapper);
+  }
+  input.focus();
+
+  const done = async () => {
+    const name = input.value.trim();
+    wrapper.remove();
+    if (!name) return;
+    await fetch('/experiments/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, parent_id: parentId || null }),
+    });
+    _expandedFolders.add(parentId);
+    await fetchFolders();
+  };
+
+  input.addEventListener('blur', done);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); done(); }
+    if (e.key === 'Escape') { input.value = ''; input.blur(); }
+  });
+}
+
+function _startInlineRename(item, folderId) {
+  const nameEl = item.querySelector('.folder-name');
+  if (!nameEl) return;
+  const oldName = nameEl.textContent.replace(/^📁\s*/, '');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'folder-new-input';
+  input.value = oldName;
+  input.style.margin = '0';
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const done = async () => {
+    const newName = input.value.trim();
+    if (newName && newName !== oldName) {
+      await fetch(`/experiments/folders/${encodeURIComponent(folderId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      });
+      await fetchFolders();
+    } else {
+      renderFolderTree(_folderData);
+    }
+  };
+
+  input.addEventListener('blur', done);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); done(); }
+    if (e.key === 'Escape') { renderFolderTree(_folderData); }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -182,6 +370,54 @@ function bindNotebookEvents() {
     ta.addEventListener('input', () => {
       ta.style.height = 'auto';
       ta.style.height = Math.max(44, ta.scrollHeight) + 'px';
+    });
+    // ── 粘贴图片上传 ──
+    ta.addEventListener('paste', async (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (!file) continue;
+          // 显示上传中提示
+          const placeholder = '![上传中…]()';
+          const start = ta.selectionStart;
+          const end = ta.selectionEnd;
+          const before = ta.value.substring(0, start);
+          const after = ta.value.substring(end);
+          ta.value = before + placeholder + after;
+          ta.selectionStart = start + placeholder.length;
+          ta.selectionEnd = start + placeholder.length;
+          ta.dispatchEvent(new Event('input'));
+          try {
+            const form = new FormData();
+            form.append('file', file);
+            const r = await fetch('/experiments/upload-image', {
+              method: 'POST',
+              body: form,
+            });
+            const d = await r.json();
+            if (r.ok && d.url) {
+              const md = `![image](${d.url})`;
+              const cur = ta.value;
+              ta.value = cur.replace(placeholder, md);
+              const pos = cur.indexOf(placeholder) + md.length;
+              ta.selectionStart = pos;
+              ta.selectionEnd = pos;
+              showToast('图片已上传', 'success');
+            } else {
+              ta.value = ta.value.replace(placeholder, '');
+              showToast(d.error || '上传失败', 'error');
+            }
+          } catch (err) {
+            ta.value = ta.value.replace(placeholder, '');
+            showToast('上传失败: ' + err.message, 'error');
+          }
+          ta.dispatchEvent(new Event('input'));
+          return;
+        }
+      }
     });
   });
 }
@@ -441,6 +677,17 @@ async function viewExperiment(expId) {
   html += `<input type="text" class="text-input" id="nbTags" value="${escapeHtml(tagsStr)}" placeholder="标签，逗号分隔">`;
   html += '</div>';
 
+  // 文件夹选择
+  html += '<div class="exp-nb-field" style="margin-top:6px">';
+  html += '<label>文件夹</label>';
+  html += '<select class="text-input" id="nbFolder" style="width:100%">';
+  html += '<option value="">— 无 —</option>';
+  for (const f of _folderData) {
+    html += _folderSelectOptions(f, '', exp.folder_id || '', 0);
+  }
+  html += '</select>';
+  html += '</div>';
+
   // ── 模式切换 ──
   html += '<div class="nb-mode-bar">';
   html += '<button class="nb-mode-btn active" data-mode="preview">预览</button>';
@@ -496,24 +743,6 @@ async function viewExperiment(expId) {
     });
   });
 
-  // ── 日志折叠 ──
-  const logViewer = document.getElementById('logContent');
-  logViewer.addEventListener('click', (e) => {
-    const toggle = e.target.closest('.nb-task-cmd-toggle.has-log');
-    if (!toggle) return;
-    const block = toggle.closest('.nb-block');
-    const logEl = block ? block.querySelector('.nb-task-preview-log') : null;
-    const arrow = toggle.querySelector('.nb-toggle-arrow');
-    if (!logEl || !arrow) return;
-    if (logEl.style.display === 'none') {
-      logEl.style.display = '';
-      arrow.classList.add('expanded');
-    } else {
-      logEl.style.display = 'none';
-      arrow.classList.remove('expanded');
-    }
-  });
-
   // ── 保存 ──
   document.getElementById('nbSaveBtn').addEventListener('click', async () => {
     const title = document.getElementById('nbTitle').value.trim();
@@ -525,7 +754,10 @@ async function viewExperiment(expId) {
       const r = await fetch(`/experiments/${expId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, blocks, tags }),
+        body: JSON.stringify({
+          title, blocks, tags,
+          folder_id: nbFolder?.value || null,
+        }),
       });
       const d = await r.json();
       if (r.ok) {
@@ -586,12 +818,36 @@ function openExpModal(taskData) {
   expCommand.value = '';
   expDeleteBtn.style.display = 'none';
   expModalTitle.textContent = '保存实验记录';
+  expFolder.value = '';
+
+  // 填充文件夹选项
+  _populateFolderSelect();
 
   if (taskData) {
     expTitle.value = taskData.command ? taskData.command.substring(0, 80) : '';
   }
 
   expModal.style.display = '';
+}
+
+function _populateFolderSelect(selectedId) {
+  let opts = '<option value="">— 无 —</option>';
+  for (const f of _folderData) {
+    opts += _folderSelectOptions(f, '', selectedId || '', 0);
+  }
+  expFolder.innerHTML = opts;
+}
+
+function _folderSelectOptions(f, prefix, selectedId, depth) {
+  const indent = '  '.repeat(depth);
+  const sel = f.id === selectedId ? ' selected' : '';
+  let html = `<option value="${f.id}"${sel}>${indent}📁 ${escapeHtml(f.name)}</option>`;
+  if (f.children) {
+    for (const c of f.children) {
+      html += _folderSelectOptions(c, prefix, selectedId, depth + 1);
+    }
+  }
+  return html;
 }
 
 function closeExpModal() {
@@ -624,6 +880,7 @@ async function saveExperiment() {
       body: JSON.stringify({
         title, blocks, tags,
         created_by: state.cmdUserId || '',
+        folder_id: expFolder.value || null,
       }),
     });
     const d = await r.json();
@@ -687,6 +944,23 @@ expSearchInput.addEventListener('input', () => {
 // ═══════════════════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════════════════
+
+// ── 日志折叠（全局委托，只绑定一次） ──
+document.getElementById('logContent').addEventListener('click', (e) => {
+  const toggle = e.target.closest('.nb-task-cmd-toggle.has-log');
+  if (!toggle) return;
+  const block = toggle.closest('.nb-block');
+  const logEl = block ? block.querySelector('.nb-task-preview-log') : null;
+  const arrow = toggle.querySelector('.nb-toggle-arrow');
+  if (!logEl || !arrow) return;
+  if (logEl.style.display === 'none') {
+    logEl.style.display = '';
+    arrow.classList.add('expanded');
+  } else {
+    logEl.style.display = 'none';
+    arrow.classList.remove('expanded');
+  }
+});
 
 // Initial queue load if node is selected
 if (state.selectedNodeId) {

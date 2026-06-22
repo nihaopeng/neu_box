@@ -18,6 +18,7 @@
   <div class="panel panel-form" id="formPanel">
     <div class="header">
       <h1>neu_box</h1>
+      <button class="theme-toggle" id="themeToggle" title="切换浅色/深色模式">🌙</button>
       <!-- 模式切换 -->
       <div class="mode-toggle" id="modeToggle">
         <button type="button" data-mode="command" class="active">任务</button>
@@ -135,6 +136,15 @@
     <div class="exp-search-row">
       <input type="text" class="text-input" id="expSearchInput" placeholder="搜索实验…" autocomplete="off">
     </div>
+    <!-- 文件夹树 -->
+    <div class="folder-tree" id="folderTree">
+      <div class="folder-item active" data-folder-id="">
+        <span class="folder-name">📁 全部实验</span>
+        <span class="folder-actions" style="display:flex">
+          <button class="folder-act-btn" data-action="add-child" title="新建文件夹">＋</button>
+        </span>
+      </div>
+    </div>
     <div class="queue-list" id="experimentList">
       <div class="queue-empty">暂无实验记录</div>
     </div>
@@ -222,6 +232,12 @@
       <div class="field">
         <label>标签 <span class="unit">逗号分隔</span></label>
         <input type="text" class="text-input" id="expTags" placeholder="breakdown, resnet50" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>文件夹</label>
+        <select class="text-input" id="expFolder" style="width:100%">
+          <option value="">— 无 —</option>
+        </select>
       </div>
       <input type="hidden" id="expId">
       <input type="hidden" id="expTaskId">

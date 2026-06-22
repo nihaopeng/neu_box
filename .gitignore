@@ -8,4 +8,6 @@ __pycache__/
 .env
 worker/db/
 master/db/
+master/static/uploads/*
+!master/static/uploads/.gitkeep
 *.log

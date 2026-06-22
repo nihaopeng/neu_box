@@ -174,7 +174,8 @@ function switchMode(mode) {
     logContent.style.display = 'none';
     logContent.innerHTML = '';
     logActions.style.display = 'none';
-    // Load experiments
+    // Load experiments and folders
+    fetchFolders();
     fetchExperiments();
   }
 
@@ -627,6 +628,32 @@ addNodeBtn.addEventListener('click', addConfigNode);
 // Enter key in port field triggers add
 newNodePort.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') addConfigNode();
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Theme toggle
+// ═══════════════════════════════════════════════════════════════
+
+const themeToggle = document.getElementById('themeToggle');
+
+function applyTheme(dark) {
+  if (dark) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    themeToggle.textContent = '☀️';
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    themeToggle.textContent = '🌙';
+  }
+}
+
+// 从 localStorage 读取，默认浅色
+const savedTheme = localStorage.getItem('neu_box_theme');
+applyTheme(savedTheme === 'dark');
+
+themeToggle.addEventListener('click', () => {
+  const isDark = document.documentElement.hasAttribute('data-theme');
+  applyTheme(!isDark);
+  localStorage.setItem('neu_box_theme', !isDark ? 'dark' : 'light');
 });
 
 // Init UI to default mode

@@ -2,6 +2,113 @@
    Experiment panel
    ═══════════════════════════════════════════════════════════════ */
 
+/* ── Folder tree ───────────────────────────────────────── */
+
+.folder-tree {
+  padding: 0 0 6px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--sub);
+  user-select: none;
+}
+
+.folder-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.folder-item.active {
+  background: var(--accent-bg, rgba(0, 122, 255, 0.15));
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.folder-item .folder-arrow {
+  font-size: 7px;
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+  transition: transform .15s;
+}
+
+.folder-item .folder-arrow.expanded {
+  transform: rotate(90deg);
+}
+
+.folder-item.no-children .folder-arrow {
+  visibility: hidden;
+}
+
+.folder-item .folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-item .folder-count {
+  font-size: 10px;
+  color: var(--sub);
+  flex-shrink: 0;
+}
+
+.folder-item .folder-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.folder-item:hover .folder-actions {
+  display: flex;
+}
+
+.folder-item .folder-act-btn {
+  padding: 1px 4px;
+  border: none;
+  background: transparent;
+  color: var(--sub);
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+}
+
+.folder-item .folder-act-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.folder-children {
+  padding-left: 16px;
+}
+
+/* new-folder input */
+.folder-new-input {
+  width: 100%;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  outline: none;
+  margin: 2px 0;
+}
+
+.folder-new-input:focus {
+  border-color: var(--accent);
+}
+
 .exp-search-row {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
@@ -226,23 +333,23 @@
 
 .terminal-box {
   padding: 12px;
-  background: #1e1e1e;
-  border: 1px solid #333;
+  background: var(--nb-card-bg);
+  border: 1px solid var(--nb-border);
   border-radius: 6px;
   font-size: 12px;
-  color: #d4d4d4;
+  color: var(--nb-text);
 }
 
 .terminal-box .exp-log-meta {
-  color: #888;
+  color: var(--nb-sub);
   margin-bottom: 8px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--nb-border);
   font-size: 11px;
 }
 
 .terminal-box .exp-log-stdout {
-  color: #d4d4d4;
+  color: var(--nb-text);
   white-space: pre-wrap;
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
   line-height: 1.5;
@@ -256,7 +363,7 @@
 }
 
 .terminal-box .exp-log-no-output {
-  color: #666;
+  color: var(--nb-sub);
   font-style: italic;
   text-align: center;
   padding: 8px 0;
@@ -305,7 +412,7 @@
 .exp-nb-actions {
   position: sticky;
   bottom: 0;
-  background: #1d1d1f;
+  background: var(--nb-bg);
   border-top: 1px solid var(--border);
   padding-top: 10px;
   padding-bottom: 6px;
@@ -397,7 +504,7 @@
   border-radius: 0;
 }
 
-.nb-textarea:focus { background: #252525; }
+.nb-textarea:focus { background: var(--nb-code-bg); }
 
 /* ── Task fields ─────────────────────────────────────────── */
 
@@ -506,9 +613,9 @@
 .nb-picker-log {
   width: 100%;
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  border-color: #333;
+  background: var(--nb-card-bg);
+  color: var(--nb-text);
+  border-color: var(--nb-border);
 }
 
 /* ── Mode bar ─────────────────────────────────────────────── */
@@ -547,10 +654,10 @@
 
 .nb-block-preview {
   padding: 8px 10px;
-  background: #1e1e1e;
+  background: var(--nb-card-bg);
   font-size: 13px;
   line-height: 1.6;
-  color: #d4d4d4;
+  color: var(--nb-text);
 }
 
 .nb-block-preview h1,
@@ -558,9 +665,9 @@
 .nb-block-preview h3,
 .nb-block-preview h4,
 .nb-block-preview h5,
-.nb-block-preview h6 { color: #e8e8e8; }
+.nb-block-preview h6 { color: var(--nb-text); }
 
-.nb-block-preview h1 { font-size: 20px; margin: 8px 0 4px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+.nb-block-preview h1 { font-size: 20px; margin: 8px 0 4px; border-bottom: 1px solid var(--nb-border); padding-bottom: 4px; }
 .nb-block-preview h2 { font-size: 17px; margin: 6px 0 3px; }
 .nb-block-preview h3 { font-size: 15px; margin: 5px 0 3px; }
 .nb-block-preview h4,
@@ -580,8 +687,8 @@
 }
 
 .nb-block-preview pre {
-  background: #252525;
-  border: 1px solid #333;
+  background: var(--nb-code-bg);
+  border: 1px solid var(--nb-border);
   border-radius: 6px;
   padding: 10px 12px;
   overflow-x: auto;
@@ -592,16 +699,16 @@
   background: transparent;
   padding: 0;
   border-radius: 0;
-  color: #d4d4d4;
+  color: var(--nb-text);
   font-size: 12px;
   line-height: 1.5;
 }
 
 .nb-block-preview blockquote {
-  border-left: 3px solid #555;
+  border-left: 3px solid var(--nb-blockquote-border);
   margin: 6px 0;
   padding: 2px 10px;
-  color: #999;
+  color: var(--nb-blockquote-text);
 }
 
 .nb-block-preview ul,
@@ -620,7 +727,7 @@
 
 .nb-block-preview th,
 .nb-block-preview td {
-  border: 1px solid #444;
+  border: 1px solid var(--nb-table-border);
   padding: 4px 8px;
   text-align: left;
 }
@@ -631,13 +738,13 @@
 
 .nb-block-preview hr {
   border: none;
-  border-top: 1px solid #444;
+  border-top: 1px solid var(--nb-table-border);
   margin: 8px 0;
 }
 
 .nb-block-preview img { max-width: 100%; border-radius: 4px; }
 
-.nb-block-preview strong { color: #e8e8e8; }
+.nb-block-preview strong { color: var(--nb-text); }
 
 /* ── Task preview ─────────────────────────────────────────── */
 
@@ -658,7 +765,7 @@
 }
 
 .nb-task-cmd-toggle.has-log:hover {
-  background: #252528;
+  background: var(--nb-hover);
 }
 
 .nb-toggle-arrow {
@@ -675,10 +782,10 @@
 
 .nb-task-preview-log {
   padding: 10px 12px;
-  background: #1e1e1e;
+  background: var(--nb-card-bg);
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
   font-size: 12px;
-  color: #d4d4d4;
+  color: var(--nb-text);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-x: auto;

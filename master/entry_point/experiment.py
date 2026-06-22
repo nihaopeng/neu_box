@@ -7,6 +7,9 @@
 """
 
 import logging
+import os
+import uuid
+from datetime import datetime
 
 from flask import Blueprint, request
 
@@ -16,13 +19,22 @@ experiment_bp = Blueprint('experiment', __name__)
 db = Database.get_instance()
 logger = logging.getLogger('master.experiment')
 
+# 图片上传大小限制 (默认 10MB)
+UPLOAD_MAX_SIZE = int(os.getenv('upload_max_size', str(10 * 1024 * 1024)))
+# 允许的图片 MIME 类型
+ALLOWED_MIMETYPES = {
+    'image/png', 'image/jpeg', 'image/gif',
+    'image/webp', 'image/bmp', 'image/svg+xml',
+}
+
 
 @experiment_bp.route('/', methods=['POST'])
 def create_experiment():
     """创建实验。
 
     请求体:
-      { "title": "...", "blocks": [...], "tags": [...], "created_by": "..." }
+      { "title": "...", "blocks": [...], "tags": [...], "created_by": "...",
+        "folder_id": "..." }
     """
     data = request.get_json(silent=True) or {}
     title = (data.get('title') or '').strip()
@@ -33,6 +45,7 @@ def create_experiment():
         blocks=data.get('blocks') or [],
         tags=data.get('tags') or [],
         created_by=(data.get('created_by') or '').strip(),
+        folder_id=data.get('folder_id') or None,
     )
     return {'id': exp_id, 'message': '实验记录已创建'}, 201
 
@@ -42,9 +55,12 @@ def list_experiments():
     search = (request.args.get('search') or '').strip()
     tag = (request.args.get('tag') or '').strip()
     created_by = (request.args.get('created_by') or '').strip()
+    folder_id = request.args.get('folder_id') or None
     limit = request.args.get('limit', 100, type=int)
     experiments = db.list_experiments(search=search, tag=tag,
-                                      created_by=created_by, limit=limit)
+                                      created_by=created_by,
+                                      folder_id=folder_id,
+                                      limit=limit)
     return {'experiments': experiments, 'total': len(experiments)}, 200
 
 
@@ -68,12 +84,156 @@ def update_experiment(exp_id: str):
         title=data.get('title'),
         blocks=data.get('blocks'),
         tags=data.get('tags'),
+        folder_id=data.get('folder_id'),
     )
     return {'message': '已保存'}, 200
 
 
+@experiment_bp.route('/upload-image', methods=['POST'])
+def upload_image():
+    """上传图片，返回 Markdown 可用的 URL。
+
+    请求: multipart/form-data, 字段名 file
+    返回: { "url": "/static/uploads/2026/06/abc123.png", "size": 12345 }
+    """
+    if 'file' not in request.files:
+        return {'error': '缺少 file 字段'}, 400
+
+    file = request.files['file']
+    if not file.filename:
+        return {'error': '文件名为空'}, 400
+
+    # 验证 MIME 类型
+    mimetype = (file.content_type or '').lower()
+    if mimetype not in ALLOWED_MIMETYPES:
+        return {'error': f'不支持的图片类型: {mimetype}'}, 400
+
+    # 大小检查
+    file.seek(0, os.SEEK_END)
+    size = file.tell()
+    file.seek(0)
+    if size > UPLOAD_MAX_SIZE:
+        max_mb = UPLOAD_MAX_SIZE // (1024 * 1024)
+        return {'error': f'图片过大 (最大 {max_mb}MB)'}, 400
+
+    # 扩展名
+    ext = os.path.splitext(file.filename)[1].lower()
+    if not ext or len(ext) > 10:
+        ext = '.png'
+    if ext == '.jpg':
+        ext = '.jpeg'
+
+    # 按月份分目录，UUID 命名
+    month_dir = datetime.now().strftime('%Y/%m')
+    upload_dir = os.path.join(
+        os.path.dirname(__file__), '..', 'static', 'uploads', month_dir
+    )
+    os.makedirs(upload_dir, exist_ok=True)
+
+    filename = f"{uuid.uuid4().hex[:12]}{ext}"
+    filepath = os.path.join(upload_dir, filename)
+    file.save(filepath)
+
+    url = f"/static/uploads/{month_dir}/{filename}"
+    logger.warning("图片上传成功: %s (%s bytes)", url, size)
+
+    return {'url': url, 'size': size}, 201
+
+
+# ═══════════════════════════════════════════════════════════════
+# Folders API
+# ═══════════════════════════════════════════════════════════════
+
+@experiment_bp.route('/folders', methods=['GET'])
+def list_folders():
+    """获取文件夹树。"""
+    tree = db.get_folder_tree()
+    return {'folders': tree}, 200
+
+
+@experiment_bp.route('/folders', methods=['POST'])
+def create_folder():
+    """创建文件夹。
+
+    请求体: { "name": "...", "parent_id": "..." }
+    """
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return {'error': '文件夹名称不能为空'}, 400
+    fid = db.create_folder(name=name, parent_id=data.get('parent_id') or None)
+    return {'id': fid, 'name': name}, 201
+
+
+@experiment_bp.route('/folders/<fid>', methods=['PUT'])
+def update_folder(fid: str):
+    """重命名或移动文件夹。
+
+    请求体: { "name": "...", "parent_id": "..." }
+    """
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if name:
+        db.rename_folder(fid, name)
+    if 'parent_id' in data:
+        ok = db.move_folder(fid, data.get('parent_id') or None)
+        if not ok:
+            return {'error': '不能移动到自己的子文件夹中'}, 400
+    return {'message': '已更新'}, 200
+
+
+@experiment_bp.route('/folders/<fid>', methods=['DELETE'])
+def delete_folder(fid: str):
+    if not db.delete_folder(fid):
+        return {'error': '文件夹不存在'}, 404
+    return {'message': '已删除'}, 200
+
+
 @experiment_bp.route('/<exp_id>', methods=['DELETE'])
 def delete_experiment(exp_id: str):
+    # 清理实验引用的图片
+    exp = db.get_experiment(exp_id)
+    if exp:
+        _cleanup_images(exp.get('blocks', []))
     if not db.delete_experiment(exp_id):
         return {'error': '实验记录不存在'}, 404
     return {'message': '已删除'}, 200
+
+
+def _cleanup_images(blocks: list):
+    """扫描 blocks 中的 /static/uploads/ 图片，删除未被其他实验引用的文件。"""
+    import re
+    urls = set()
+    for block in blocks:
+        if block.get('type') != 'text':
+            continue
+        content = block.get('content', '') or ''
+        for m in re.finditer(r'/static/uploads/(\d{4}/\d{2}/[a-f0-9]+\.\w+)', content):
+            urls.add(m.group(1))
+
+    if not urls:
+        return
+
+    # 获取所有其他实验的内容，检查是否仍被引用
+    all_exps = db.list_experiments(limit=10000)
+    referenced = set()
+    for other in all_exps:
+        for b in (other.get('blocks') or []):
+            if b.get('type') != 'text':
+                continue
+            content = b.get('content', '') or ''
+            for m in re.finditer(r'/static/uploads/(\d{4}/\d{2}/[a-f0-9]+\.\w+)', content):
+                referenced.add(m.group(1))
+
+    uploads_root = os.path.join(
+        os.path.dirname(__file__), '..', 'static', 'uploads'
+    )
+    for rel_path in urls:
+        if rel_path not in referenced:
+            fp = os.path.join(uploads_root, rel_path)
+            try:
+                if os.path.isfile(fp):
+                    os.remove(fp)
+                    logger.warning("清理孤儿图片: %s", rel_path)
+            except OSError:
+                pass

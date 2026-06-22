@@ -64,8 +64,7 @@ sudo python main.py
 | `command_max_completed` | `200` | 已完成任务保留上限 |
 | `task_log_dir` | `./logs` | 日志文件目录 |
 | `LOG_LEVEL` | `INFO` | 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `gpu_info_script_path` | — | GPU 状态采集脚本路径 |
-| `npu_info_script_path` | — | NPU 状态采集脚本路径 |
+| `dev_info_script_path` | — | 设备状态采集脚本路径，返回 `{"total":N,"idle":N}` |
 | `sandbox_script_path` | — | 沙盒管理脚本路径（cgroup + eBPF） |
 
 ## 数据流
