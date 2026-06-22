@@ -649,6 +649,30 @@
   border-bottom: 1px solid var(--border);
 }
 
+.nb-task-cmd-toggle.has-log {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nb-task-cmd-toggle.has-log:hover {
+  background: #252528;
+}
+
+.nb-toggle-arrow {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform .15s;
+  flex-shrink: 0;
+  color: var(--sub);
+}
+
+.nb-toggle-arrow.expanded {
+  transform: rotate(90deg);
+}
+
 .nb-task-preview-log {
   padding: 10px 12px;
   background: #1e1e1e;

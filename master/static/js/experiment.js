@@ -89,10 +89,13 @@ function blockPreviewHtml(block, index) {
   if (block.type === 'task') {
     const cmd = escapeHtml(block.command || '');
     const log = block.log || '';
+    const hasLog = log && log.trim();
     return `
       <div class="nb-block" data-block-idx="${index}">
-        <div class="nb-task-preview-cmd">${cmd || '<span style="color:var(--sub);font-style:italic">无命令</span>'}</div>
-        ${log ? `<div class="nb-task-preview-log">${escapeHtml(log)}</div>` : ''}
+        <div class="nb-task-preview-cmd nb-task-cmd-toggle ${hasLog ? 'has-log' : ''}">
+          ${hasLog ? '<span class="nb-toggle-arrow">▶</span> ' : ''}${cmd || '<span style="color:var(--sub);font-style:italic">无命令</span>'}
+        </div>
+        ${hasLog ? `<div class="nb-task-preview-log" style="display:none">${escapeHtml(log)}</div>` : ''}
       </div>`;
   }
   return '';
@@ -491,6 +494,24 @@ async function viewExperiment(expId) {
       // 完全重建笔记本视图
       renderNotebookBlocks(_currentExpData);
     });
+  });
+
+  // ── 日志折叠 ──
+  const logViewer = document.getElementById('logContent');
+  logViewer.addEventListener('click', (e) => {
+    const toggle = e.target.closest('.nb-task-cmd-toggle.has-log');
+    if (!toggle) return;
+    const block = toggle.closest('.nb-block');
+    const logEl = block ? block.querySelector('.nb-task-preview-log') : null;
+    const arrow = toggle.querySelector('.nb-toggle-arrow');
+    if (!logEl || !arrow) return;
+    if (logEl.style.display === 'none') {
+      logEl.style.display = '';
+      arrow.classList.add('expanded');
+    } else {
+      logEl.style.display = 'none';
+      arrow.classList.remove('expanded');
+    }
   });
 
   // ── 保存 ──
