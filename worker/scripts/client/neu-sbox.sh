@@ -1,6 +1,8 @@
-# neu-sbox — 将当前终端加入独占设备的 cgroup 沙盒
+# neu-sbox — 将当前终端加入独占设备的 cgroup 沙盒 / 提交命令任务
 # 安装: sudo cp neu-sbox.sh /etc/profile.d/
-# 用法: neu-sbox acquire [设备数] [CPU核数] [内存(GB)]
+# 用法:
+#   neu-sbox acquire [设备数] [CPU核数] [内存(GB)] [命令]
+#   neu-sbox tasks
 
 neu-sbox() {
     local cmd="${1:-}"
@@ -11,6 +13,33 @@ neu-sbox() {
             local device_num="${2:-0}"
             local cpu="${3:-0}"
             local memory="${4:-0}"
+            local command="${5:-}"
+
+            # 如果提供了命令参数，走任务提交路径
+            if [ -n "$command" ]; then
+                echo "[neu-sbox] 提交任务: device=${device_num} cpu=${cpu} mem=${memory}G"
+                echo "[neu-sbox] 命令: ${command}"
+                echo "[neu-sbox] user=${USER}"
+
+                local resp
+                resp=$(curl -s -X POST "${WORKER_URL}/command/run" \
+                    -H "Content-Type: application/json" \
+                    -d "{\"user_id\":\"${USER}\",\"command\":\"${command}\",\"device_num\":${device_num},\"cpu\":${cpu},\"memory\":${memory},\"mem_unit\":\"GB\"}")
+
+                echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+
+                if echo "$resp" | grep -q '"task_id"'; then
+                    local task_id position
+                    task_id=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])" 2>/dev/null)
+                    position=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['position'])" 2>/dev/null)
+                    echo ""
+                    echo "✓ 任务已提交，ID=${task_id} 队列位置 #${position}"
+                    echo "  查看日志: neu-sbox result ${task_id}"
+                fi
+                return
+            fi
+
+            # 无命令 → 沙盒模式（加入当前 shell）
             local shell_pid=$$
 
             echo "[neu-sbox] 申请沙盒: device=${device_num} cpu=${cpu} mem=${memory}G"
@@ -64,19 +93,44 @@ neu-sbox() {
             fi
             ;;
 
+        tasks|t)
+            echo "[neu-sbox] 任务队列:"
+            local resp
+            resp=$(curl -s "${WORKER_URL}/command/queue")
+            echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+            ;;
+
+        result|res)
+            local task_id="${2:-}"
+            if [ -z "$task_id" ]; then
+                echo "用法: neu-sbox result <task_id>"
+                return 1
+            fi
+            echo "[neu-sbox] 任务 ${task_id} 结果:"
+            local resp
+            resp=$(curl -s "${WORKER_URL}/command/result/${task_id}")
+            echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+            ;;
+
         *)
-            echo "neu-sbox — 终端沙盒隔离"
+            echo "neu-sbox — 终端沙盒隔离 / 命令任务提交"
             echo ""
-            echo "用法: neu-sbox {acquire|release|list|status} [参数]"
+            echo "用法: neu-sbox {acquire|release|list|status|tasks|result} [参数]"
             echo ""
-            echo "  acquire [设备数] [CPU] [内存]   创建沙盒并加入当前 shell"
-            echo "  release <sandbox_name>         释放沙盒"
-            echo "  list                           列出我的沙盒"
-            echo "  status                         查看当前 shell 沙盒状态"
+            echo "  acquire [设备数] [CPU] [内存]            创建沙盒并加入当前 shell"
+            echo "  acquire [设备数] [CPU] [内存] <命令>     提交命令任务"
+            echo "  release <sandbox_name>                   释放沙盒"
+            echo "  list                                     列出我的沙盒"
+            echo "  status                                   查看当前 shell 沙盒状态"
+            echo "  tasks                                    查看任务队列"
+            echo "  result <task_id>                         查看任务执行结果"
             echo ""
             echo "示例:"
-            echo "  neu-sbox acquire 1             # 申请 1 个 NPU"
-            echo "  neu-sbox acquire 2 4 8         # 申请 2 NPU + 4 核 + 8G"
+            echo "  neu-sbox acquire 1                       # 申请 1 个 NPU 沙盒"
+            echo "  neu-sbox acquire 2 4 8                   # 申请 2 NPU + 4 核 + 8G 沙盒"
+            echo "  neu-sbox acquire 1 2 4 nvidia-smi        # 提交任务: 1 NPU 2核 4G 执行 nvidia-smi"
+            echo "  neu-sbox tasks                           # 查看队列"
+            echo "  neu-sbox result abc123                   # 查看任务 abc123 结果"
             echo "  neu-sbox release user_pengyt_12345"
             echo ""
             echo "远程 Worker: export NEU_BOX_URL=http://<worker_ip>:59075"
