@@ -106,6 +106,17 @@ _cg_id() {
     stat -c %i "$(_cg "$1")" 2>/dev/null
 }
 
+# 自动检测 bpftool 支持的 cgroup device attach type
+# 旧版用 cgroup_device，新版（5.15+）用 device
+_bpf_device_attach_type() {
+    if bpftool cgroup help 2>&1 | grep -q 'cgroup_device'; then
+        echo "cgroup_device"
+    else
+        echo "device"
+    fi
+}
+BPF_DEV_TYPE="$(_bpf_device_attach_type)"
+
 # little-endian hex 构建
 _u64_hex() {
     local v="$1"
@@ -129,7 +140,7 @@ _bpf_detach() {
     bpftool cgroup show "$CGROUP_ROOT" 2>/dev/null | \
         awk '/device_reserve/{print $1}' | \
         while read id; do
-            bpftool cgroup detach "$CGROUP_ROOT" cgroup_device id "$id" 2>/dev/null || true
+            bpftool cgroup detach "$CGROUP_ROOT" $BPF_DEV_TYPE id "$id" 2>/dev/null || true
         done
     echo "[bpf] ✓ 已分离"
 }
@@ -159,7 +170,7 @@ _ensure_bpf_ready() {
     # 已加载但未挂载 → 仅重新挂载
     if _bpf_is_loaded && ! _bpf_is_attached; then
         echo "[bpf] BPF 程序已加载但未挂载，重新挂载..."
-        bpftool cgroup attach "$CGROUP_ROOT" cgroup_device \
+        bpftool cgroup attach "$CGROUP_ROOT" $BPF_DEV_TYPE \
             pinned "$BPF_PIN"|| die "BPF 挂载到 root cgroup 失败"
         echo "[bpf] ✓ 已挂载"
         return
@@ -177,7 +188,7 @@ _ensure_bpf_ready() {
     ls -l "$MAP_DIR/"
 
     echo "[bpf] 挂载 BPF 到 root cgroup ..."
-    bpftool cgroup attach "$CGROUP_ROOT" cgroup_device \
+    bpftool cgroup attach "$CGROUP_ROOT" $BPF_DEV_TYPE \
         pinned "$BPF_PIN"|| die "BPF 挂载到 root cgroup 失败"
     echo "[bpf] ✓ 已挂载"
 }
@@ -198,8 +209,8 @@ cmd_load() {
     bpftool prog load "$BPF_OBJ" "$BPF_PIN" pinmaps "$MAP_DIR"
     echo "✓ BPF 程序已加载"
     ls -l "$MAP_DIR/"
-    bpftool cgroup attach "$CGROUP_ROOT" cgroup_device \
-        pinned "$BPF_PIN" multi || die "BPF 挂载失败"
+    bpftool cgroup attach "$CGROUP_ROOT" $BPF_DEV_TYPE \
+        pinned "$BPF_PIN" || die "BPF 挂载失败"
     echo "✓ 已挂载到 root cgroup"
 }
 
