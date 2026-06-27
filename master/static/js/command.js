@@ -142,9 +142,17 @@ queueRefreshBtn.addEventListener('click', () => {
 // Log viewer
 // ═══════════════════════════════════════════════════════════════
 
-// 当前查看任务已拉取的日志长度，用于增量刷新
+// 当前查看任务已拉取的 stdout 长度，用于增量刷新
 let _stdoutLen = 0;
-let _stderrLen = 0;
+
+// 处理 \r 字符：模拟终端行为，每行只保留最后一个 \r 之后的内容
+function _handleCR(text) {
+  if (!text || text.indexOf('\r') < 0) return text;
+  return text.split('\n').map(line => {
+    const idx = line.lastIndexOf('\r');
+    return idx >= 0 ? line.substring(idx + 1) : line;
+  }).join('\n');
+}
 
 async function viewTaskLog(taskId) {
   if (!state.selectedNodeId) return;
@@ -166,7 +174,6 @@ async function viewTaskLog(taskId) {
   if (!isSameTask) {
     // 新任务：重置偏移量 + 显示加载中
     _stdoutLen = 0;
-    _stderrLen = 0;
     logContent.innerHTML = '<div style="color:#636366">加载中…</div>';
   }
   logActions.style.display = 'none';
@@ -174,9 +181,8 @@ async function viewTaskLog(taskId) {
   try {
     const params = new URLSearchParams({ node_id: state.selectedNodeId });
     // 增量拉取：只请求上次之后的新内容
-    if (isSameTask && (_stdoutLen > 0 || _stderrLen > 0)) {
+    if (isSameTask && _stdoutLen > 0) {
       params.set('stdout_offset', _stdoutLen);
-      params.set('stderr_offset', _stderrLen);
     }
     const resp = await fetch(`/command/result/${taskId}?${params}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -193,7 +199,6 @@ async function viewTaskLog(taskId) {
       device_num: task.device_num,
       devices: task.devices,
       status: task.status,
-      // 完整任务日志，保存实验时直接传给后端持久化
       task_result: task.result ? {
         status: task.status,
         command: task.command,
@@ -218,56 +223,39 @@ async function viewTaskLog(taskId) {
       return;
     }
 
-    if (isSameTask && (_stdoutLen > 0 || _stderrLen > 0)) {
-      // ── 增量刷新：拼接新内容到已有 DOM ──
-      if (task.result) {
-        const r = task.result;
-        if (r.stdout) {
-          const el = logContent.querySelector('.log-stdout');
-          if (el) {
-            el.textContent += r.stdout;
-          } else {
-            // 首次出现 stdout 输出
-            const div = document.createElement('div');
-            div.className = 'log-stdout';
-            div.textContent = r.stdout;
-            logContent.appendChild(div);
-            // 去掉「无输出」提示
-            const noOut = logContent.querySelector('.log-no-output');
-            if (noOut) noOut.remove();
-          }
+    if (isSameTask && _stdoutLen > 0) {
+      // ── 增量刷新：拼接新 stdout 到已有 DOM ──
+      if (task.result && task.result.stdout) {
+        const el = logContent.querySelector('.log-stdout');
+        if (el) {
+          // 合并已有文本 + 新内容，统一处理 \r（模拟终端的行内覆盖）
+          el.textContent = _handleCR(el.textContent + task.result.stdout);
+        } else {
+          const div = document.createElement('div');
+          div.className = 'log-stdout';
+          div.textContent = _handleCR(task.result.stdout);
+          logContent.appendChild(div);
+          const noOut = logContent.querySelector('.log-no-output');
+          if (noOut) noOut.remove();
         }
-        if (r.stderr) {
-          const el = logContent.querySelector('.log-stderr');
-          if (el) {
-            el.textContent += r.stderr;
-          } else {
-            const div = document.createElement('div');
-            div.className = 'log-stderr';
-            div.textContent = r.stderr;
-            logContent.appendChild(div);
-            const noOut = logContent.querySelector('.log-no-output');
-            if (noOut) noOut.remove();
-          }
-        }
-        // 更新 meta 中的状态和返回码
+        // 更新 meta
         const metaEl = logContent.querySelector('.log-meta');
         if (metaEl) {
-          let metaHtml = `<strong>任务ID:</strong> ${escapeHtml(task.task_id)}<br>`;
-          metaHtml += `<strong>用户:</strong> ${escapeHtml(task.user_id)}<br>`;
-          metaHtml += `<strong>命令:</strong> ${escapeHtml(task.command)}<br>`;
-          metaHtml += `<strong>资源:</strong> CPU=${task.cpu || 0}, 内存=${task.mem || '0'}, 设备=${task.device_num || 0}`;
+          let m = `<strong>任务ID:</strong> ${escapeHtml(task.task_id)}<br>`;
+          m += `<strong>用户:</strong> ${escapeHtml(task.user_id)}<br>`;
+          m += `<strong>命令:</strong> ${escapeHtml(task.command)}<br>`;
+          m += `<strong>资源:</strong> CPU=${task.cpu || 0}, 内存=${task.mem || '0'}, 设备=${task.device_num || 0}`;
           if (task.devices && task.devices.length > 0) {
-            metaHtml += ` (${escapeHtml(task.devices.join(', '))})`;
+            m += ` (${escapeHtml(task.devices.join(', '))})`;
           }
-          metaHtml += `<br>`;
-          metaHtml += `<strong>创建时间:</strong> ${formatTime(task.created_at)}<br>`;
-          metaHtml += `<strong>状态:</strong> ${statusLabel(task.status)}`;
+          m += `<br>`;
+          m += `<strong>创建时间:</strong> ${formatTime(task.created_at)}<br>`;
+          m += `<strong>状态:</strong> ${statusLabel(task.status)}`;
           if (task.result) {
-            metaHtml += ` | <strong>返回码:</strong> ${task.result.returncode}`;
-            if (task.result.timed_out) metaHtml += ` <span style="color:#ff5f57">(超时)</span>`;
+            m += ` | <strong>返回码:</strong> ${task.result.returncode}`;
+            if (task.result.timed_out) m += ` <span style="color:#ff5f57">(超时)</span>`;
           }
-          metaEl.innerHTML = metaHtml;
+          metaEl.innerHTML = m;
         }
       }
     } else {
@@ -289,26 +277,18 @@ async function viewTaskLog(taskId) {
       }
       html += `</div>`;
 
-      if (task.result) {
-        const r = task.result;
-        if (r.stdout) {
-          html += `<div class="log-stdout">${escapeHtml(r.stdout)}</div>`;
-        }
-        if (r.stderr) {
-          html += `<div class="log-stderr">${escapeHtml(r.stderr)}</div>`;
-        }
-        if (!r.stdout && !r.stderr) {
-          html += `<div class="log-no-output">(无输出)</div>`;
-        }
+      if (task.result && task.result.stdout) {
+        html += `<div class="log-stdout">${escapeHtml(_handleCR(task.result.stdout))}</div>`;
+      } else if (!task.result || !task.result.stdout) {
+        html += `<div class="log-no-output">(无输出)</div>`;
       }
 
       logContent.innerHTML = html;
     }
 
-    // 更新已拉取的长度（为下次增量请求做准备）
+    // 更新已拉取的长度
     if (task.result) {
       _stdoutLen = task.result.stdout_len || 0;
-      _stderrLen = task.result.stderr_len || 0;
     }
 
     // 显示「保存为实验记录」按钮（仅当任务已完成或失败时）

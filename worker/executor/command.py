@@ -70,11 +70,13 @@ def execute_in_sandbox(
 ) -> dict:
     """在沙盒中以指定用户身份安全执行一条命令。
 
+    stderr 已在 shell 层 2>&1 合并到 stdout，保证输出按时间序排列。
+
     流程:
       1. 建沙盒（空壳）
       2. Popen(preexec_fn: 写 PID 到 cgroup.procs → setuid 切用户 → 返回)
       3. 更新 DB 记录（join_sandbox 做幂等确认）
-      4. 启动线程逐行读取 stdout/stderr，增量写入 DB（前端可轮询拉取部分日志）
+      4. 启动线程逐行读取 stdout，增量写入 DB（前端刷新可拉到部分日志）
       5. proc.wait(timeout) 等待进程结束
       6. 清理沙盒，返回完整结果
     """
@@ -125,13 +127,23 @@ def execute_in_sandbox(
         logger.warning("启动进程, cgroup=%s, user=%s", cg_procs, username or '(root)')
         # bash -c 是非交互式 shell，不会自动 source ~/.bashrc
         # 提前拼接，让用户的 PATH、conda 等环境变量在命令执行前生效
-        full_command = f'source ~/.bashrc 2>/dev/null; {command}'
+        # exec 2>&1 把 bash 的 stderr 全局合并到 stdout，保证 && 链中所有命令的
+        # 报错（如 conda: command not found）也能被捕获，且保持时间序
+        full_command = f'source ~/.bashrc 2>/dev/null; exec 2>&1; {command}'
+        # PYTHONUNBUFFERED=1 强制 Python 子进程行缓冲输出
+        # bufsize=1 确保 Python 端管道行缓冲，数据即到即读
+        # 注意: 传 env dict 时 execve 会绕过 preexec_fn 的 os.environ 修改，
+        # 因此 HOME 必须在 dict 中显式设置为目标用户的 home 目录
+        popen_env = {**os.environ, 'PYTHONUNBUFFERED': '1'}
+        if username:
+            popen_env['HOME'] = target_dir
         proc = subprocess.Popen(
             ['bash', '-c', full_command],
             preexec_fn=preexec,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,   # 自动 decode，逐行读取用
+            bufsize=0,  # 无缓冲，read() 即到即返
+            env=popen_env,
         )
         logger.warning("子进程 PID=%s 已启动", proc.pid)
 
@@ -142,35 +154,33 @@ def execute_in_sandbox(
         except Exception as e:
             logger.warning("join_sandbox 跳过 (进程可能已退出): %s", e)
 
-        # 4. 边跑边写日志：启动线程逐行读取 stdout/stderr，增量写入 DB
-        #    这样前端轮询 /command/result 时可以拉到部分输出
+        # 4. 边跑边写日志：启动线程逐行读取 stdout，增量写入 DB
+        #    stderr 已在 shell 层 2>&1 合并到 stdout，无需单独读取
         from executor.db import Database
         db = Database.get_instance()
-        # 从 sandbox_name 提取 task_id（格式: cmd_<task_id>）
         task_id = sandbox_name[4:] if sandbox_name.startswith('cmd_') else sandbox_name
 
         stdout_lines = []
-        stderr_lines = []
-        read_error = [None]  # 用列表包装，方便在线程中赋值
 
-        def _read_stream(stream, field, accumulator):
+        def _read_stdout():
+            # 按块读取而非按行——tqdm / 训练日志用 \r 刷新，没有 \n，
+            # readline() 会一直阻塞。read() 即到即返，不卡数据。
             try:
-                for line in iter(stream.readline, ''):
-                    if line:
-                        accumulator.append(line)
-                        try:
-                            db.append_task_output(task_id, field, line)
-                        except Exception as e:
-                            logger.warning("增量写日志失败 %s/%s: %s", task_id, field, e)
+                while True:
+                    chunk = proc.stdout.read(4096)
+                    if not chunk:
+                        break
+                    text = chunk.decode('utf-8', errors='replace')
+                    stdout_lines.append(text)
+                    try:
+                        db.append_task_output(task_id, 'stdout', text)
+                    except Exception as e:
+                        logger.warning("增量写日志失败 %s: %s", task_id, e)
             except Exception as e:
-                read_error[0] = (field, str(e))
+                logger.warning("读取 stdout 流异常: %s", e)
 
-        t_stdout = threading.Thread(
-            target=_read_stream, args=(proc.stdout, 'stdout', stdout_lines), daemon=True)
-        t_stderr = threading.Thread(
-            target=_read_stream, args=(proc.stderr, 'stderr', stderr_lines), daemon=True)
-        t_stdout.start()
-        t_stderr.start()
+        t = threading.Thread(target=_read_stdout, daemon=True)
+        t.start()
 
         # 5. 等待进程结束（带超时）
         logger.warning("等待 PID=%s 完成 (timeout=%ss)", proc.pid, timeout)
@@ -190,19 +200,14 @@ def execute_in_sandbox(
                 except Exception:
                     pass
 
-        # 等待读取线程结束（进程退出后 readline 会收到 EOF 自动退出）
-        t_stdout.join(timeout=5)
-        t_stderr.join(timeout=5)
-
-        if read_error[0]:
-            field, err = read_error[0]
-            logger.warning("读取 %s 流时异常: %s", field, err)
+        # 等待读取线程结束（进程退出后 readline 收到 EOF 自动退出）
+        t.join(timeout=5)
 
         logger.warning("PID=%s 完成, rc=%s", proc.pid, proc.returncode)
         return {
             'returncode': proc.returncode if not timed_out else -1,
             'stdout': ''.join(stdout_lines),
-            'stderr': ''.join(stderr_lines),
+            'stderr': '',
             'timed_out': timed_out,
             'error': None,
         }
