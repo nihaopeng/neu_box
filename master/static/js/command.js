@@ -139,11 +139,8 @@ queueRefreshBtn.addEventListener('click', () => {
 // Also refresh when switching nodes (handled in selectNode)
 
 // ═══════════════════════════════════════════════════════════════
-// Log viewer
+// Log viewer — 全量加载 + 进度条
 // ═══════════════════════════════════════════════════════════════
-
-// 当前查看任务已拉取的 stdout 长度，用于增量刷新
-let _stdoutLen = 0;
 
 // 处理 \r 字符：模拟终端行为，每行只保留最后一个 \r 之后的内容
 function _handleCR(text) {
@@ -154,41 +151,53 @@ function _handleCR(text) {
   }).join('\n');
 }
 
+function _renderMeta(task) {
+  let m = `<div class="log-meta">`;
+  m += `<strong>任务ID:</strong> ${escapeHtml(task.task_id)}<br>`;
+  m += `<strong>用户:</strong> ${escapeHtml(task.user_id)}<br>`;
+  m += `<strong>命令:</strong> ${escapeHtml(task.command)}<br>`;
+  m += `<strong>资源:</strong> CPU=${task.cpu || 0}, 内存=${task.mem || '0'}, 设备=${task.device_num || 0}`;
+  if (task.devices && task.devices.length > 0) {
+    m += ` (${escapeHtml(task.devices.join(', '))})`;
+  }
+  m += `<br>`;
+  m += `<strong>创建时间:</strong> ${formatTime(task.created_at)}<br>`;
+  m += `<strong>状态:</strong> ${statusLabel(task.status)}`;
+  if (task.result) {
+    m += ` | <strong>返回码:</strong> ${task.result.returncode}`;
+    if (task.result.timed_out) m += ` <span style="color:#ff5f57">(超时)</span>`;
+  }
+  m += `</div>`;
+  return m;
+}
+
+function _renderProgress(total, loaded) {
+  const pct = total > 0 ? Math.round(loaded / total * 100) : 0;
+  const kb = total > 0 ? `${(loaded / 1024).toFixed(0)} / ${(total / 1024).toFixed(0)} KB` : '';
+  return `<div class="log-progress">
+    <div class="log-progress-bar" style="width:${pct}%"></div>
+    <span class="log-progress-text">${pct}% ${kb}</span>
+  </div>`;
+}
+
 async function viewTaskLog(taskId) {
   if (!state.selectedNodeId) return;
-
-  // 自动切换到命令模式
-  if (state.mode !== 'command') {
-    switchMode('command');
-  }
-
-  const isSameTask = _currentTaskData && _currentTaskData.task_id === taskId;
-
-  // 显示日志 header
-  logHeader.style.display = '';
-  logHeaderTitle.textContent = `任务日志: ${taskId}`;
+  if (state.mode !== 'command') switchMode('command');
 
   logPlaceholder.style.display = 'none';
   logContent.style.display = '';
-
-  if (!isSameTask) {
-    // 新任务：重置偏移量 + 显示加载中
-    _stdoutLen = 0;
-    logContent.innerHTML = '<div style="color:#636366">加载中…</div>';
-  }
   logActions.style.display = 'none';
 
-  try {
-    const params = new URLSearchParams({ node_id: state.selectedNodeId });
-    // 增量拉取：只请求上次之后的新内容
-    if (isSameTask && _stdoutLen > 0) {
-      params.set('stdout_offset', _stdoutLen);
-    }
-    const resp = await fetch(`/command/result/${taskId}?${params}`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const task = await resp.json();
+  // 加载中 → 先显示进度条骨架
+  logContent.innerHTML = _renderProgress(0, 0);
 
-    // 存下来，供「保存为实验记录」使用
+  try {
+    // 1. 取元数据
+    const metaResp = await fetch(
+      `/command/result/${taskId}?node_id=${encodeURIComponent(state.selectedNodeId)}`);
+    if (!metaResp.ok) throw new Error(`HTTP ${metaResp.status}`);
+    const task = await metaResp.json();
+
     _currentTaskData = {
       task_id: task.task_id,
       node_id: state.selectedNodeId,
@@ -210,92 +219,63 @@ async function viewTaskLog(taskId) {
       } : null,
     };
 
-    // 密码错误 → 无权限
     if (task.permission_denied) {
       logContent.innerHTML = '<div style="color:#ff5f57;font-size:16px;text-align:center;padding:40px">🔒 无权限<br><span style="font-size:13px;color:#8e8e93">密码不正确</span></div>';
-      logActions.style.display = 'none';
       return;
     }
-
     if (task.error) {
       logContent.innerHTML = `<div style="color:#ff5f57">错误: ${escapeHtml(task.error)}</div>`;
-      logActions.style.display = 'none';
       return;
     }
 
-    if (isSameTask && _stdoutLen > 0) {
-      // ── 增量刷新：拼接新 stdout 到已有 DOM ──
-      if (task.result && task.result.stdout) {
-        const el = logContent.querySelector('.log-stdout');
-        if (el) {
-          // 合并已有文本 + 新内容，统一处理 \r（模拟终端的行内覆盖）
-          el.textContent = _handleCR(el.textContent + task.result.stdout);
+    // 2. XHR 全量拉取日志，利用 onprogress 更新进度条
+    const logText = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET',
+        `/command/result/${taskId}/log?node_id=${encodeURIComponent(state.selectedNodeId)}&raw=1`);
+      xhr.responseType = 'text';
+
+      let totalEst = 0;
+      xhr.onprogress = () => {
+        // 首次响应时从 Content-Length 头获取总大小
+        if (!totalEst) {
+          const cl = xhr.getResponseHeader('Content-Length');
+          if (cl) totalEst = parseInt(cl, 10);
+        }
+        logContent.innerHTML = _renderProgress(totalEst || 1, xhr.responseText.length);
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(xhr.responseText);
         } else {
-          const div = document.createElement('div');
-          div.className = 'log-stdout';
-          div.textContent = _handleCR(task.result.stdout);
-          logContent.appendChild(div);
-          const noOut = logContent.querySelector('.log-no-output');
-          if (noOut) noOut.remove();
+          reject(new Error(`HTTP ${xhr.status}`));
         }
-        // 更新 meta
-        const metaEl = logContent.querySelector('.log-meta');
-        if (metaEl) {
-          let m = `<strong>任务ID:</strong> ${escapeHtml(task.task_id)}<br>`;
-          m += `<strong>用户:</strong> ${escapeHtml(task.user_id)}<br>`;
-          m += `<strong>命令:</strong> ${escapeHtml(task.command)}<br>`;
-          m += `<strong>资源:</strong> CPU=${task.cpu || 0}, 内存=${task.mem || '0'}, 设备=${task.device_num || 0}`;
-          if (task.devices && task.devices.length > 0) {
-            m += ` (${escapeHtml(task.devices.join(', '))})`;
-          }
-          m += `<br>`;
-          m += `<strong>创建时间:</strong> ${formatTime(task.created_at)}<br>`;
-          m += `<strong>状态:</strong> ${statusLabel(task.status)}`;
-          if (task.result) {
-            m += ` | <strong>返回码:</strong> ${task.result.returncode}`;
-            if (task.result.timed_out) m += ` <span style="color:#ff5f57">(超时)</span>`;
-          }
-          metaEl.innerHTML = m;
-        }
-      }
+      };
+      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.send();
+    });
+
+    // 3. 渲染：meta 用 innerHTML，日志正文用 textContent（避免大文本 escape 开销）
+    logContent.innerHTML = _renderMeta(task);
+    const processed = _handleCR(logText);
+    if (processed) {
+      const div = document.createElement('div');
+      div.className = 'log-stdout';
+      div.textContent = processed;
+      logContent.appendChild(div);
     } else {
-      // ── 首次加载：完整渲染 ──
-      let html = `<div class="log-meta">`;
-      html += `<strong>任务ID:</strong> ${escapeHtml(task.task_id)}<br>`;
-      html += `<strong>用户:</strong> ${escapeHtml(task.user_id)}<br>`;
-      html += `<strong>命令:</strong> ${escapeHtml(task.command)}<br>`;
-      html += `<strong>资源:</strong> CPU=${task.cpu || 0}, 内存=${task.mem || '0'}, 设备=${task.device_num || 0}`;
-      if (task.devices && task.devices.length > 0) {
-        html += ` (${escapeHtml(task.devices.join(', '))})`;
-      }
-      html += `<br>`;
-      html += `<strong>创建时间:</strong> ${formatTime(task.created_at)}<br>`;
-      html += `<strong>状态:</strong> ${statusLabel(task.status)}`;
-      if (task.result) {
-        html += ` | <strong>返回码:</strong> ${task.result.returncode}`;
-        if (task.result.timed_out) html += ` <span style="color:#ff5f57">(超时)</span>`;
-      }
-      html += `</div>`;
-
-      if (task.result && task.result.stdout) {
-        html += `<div class="log-stdout">${escapeHtml(_handleCR(task.result.stdout))}</div>`;
-      } else if (!task.result || !task.result.stdout) {
-        html += `<div class="log-no-output">(无输出)</div>`;
-      }
-
-      logContent.innerHTML = html;
+      const div = document.createElement('div');
+      div.className = 'log-no-output';
+      div.textContent = '(无输出)';
+      logContent.appendChild(div);
     }
 
-    // 更新已拉取的长度
-    if (task.result) {
-      _stdoutLen = task.result.stdout_len || 0;
-    }
+    // 滚到底部
+    logContent.scrollTop = logContent.scrollHeight;
 
-    // 显示「保存为实验记录」按钮（仅当任务已完成或失败时）
     if (task.status === 'completed' || task.status === 'failed') {
       logActions.style.display = '';
-    } else {
-      logActions.style.display = 'none';
     }
 
   } catch (err) {
@@ -303,22 +283,6 @@ async function viewTaskLog(taskId) {
     logActions.style.display = 'none';
   }
 }
-
-
-// ── 日志刷新按钮 ─────────────────────────────────────────────
-const logHeader = document.getElementById('logHeader');
-const logHeaderTitle = document.getElementById('logHeaderTitle');
-const logRefreshBtn = document.getElementById('logRefreshBtn');
-
-logRefreshBtn.addEventListener('click', () => {
-  logRefreshBtn.classList.add('spinning');
-  if (_currentTaskData && _currentTaskData.task_id) {
-    viewTaskLog(_currentTaskData.task_id).finally(() =>
-      logRefreshBtn.classList.remove('spinning'));
-  } else {
-    logRefreshBtn.classList.remove('spinning');
-  }
-});
 
 
 async function submitCommand() {

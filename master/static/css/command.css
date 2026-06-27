@@ -139,7 +139,34 @@
 .queue-status.failed   { color: var(--danger); background: rgba(255,59,48,.1); }
 
 
-/* ── Log header bar ─────────────────────────────────────────── */
+/* ── Log progress bar ──────────────────────────────────────── */
+
+.log-progress {
+  position: relative;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  margin: 20px 20px 0;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.log-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width .2s;
+}
+
+.log-progress-text {
+  display: block;
+  text-align: center;
+  font-size: 11px;
+  color: var(--sub);
+  margin: 6px 20px 0;
+}
+
+/* ── Log header bar (unused, kept for reference) ────────────── */
 
 .log-header {
   display: flex;

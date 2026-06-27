@@ -86,24 +86,45 @@ def queue():
 
 @command_bp.route('/result/<task_id>', methods=['GET'])
 def result(task_id: str):
-    """查看任务结果，无需权限校验。
+    """查看任务结果元数据（状态、返回码等）。
 
-    Query: ?node_id=xxx&stdout_offset=N
+    Query: ?node_id=xxx
     """
     node_id = (request.args.get('node_id') or '').strip()
-
     if not node_id:
         return {'error': 'node_id 参数必填'}, 400
 
-    # 转发增量拉取参数到 worker
+    try:
+        resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(
+            node_id, f'/command/result/{task_id}')
+        return resp.json(), resp.status_code
+    except ValueError as e:
+        return {'error': str(e)}, 404
+
+
+@command_bp.route('/result/<task_id>/log', methods=['GET'])
+def result_log(task_id: str):
+    """获取任务日志文件内容（分块）。
+
+    Query: ?node_id=xxx&tail=N 或 &offset=N&limit=M
+    代理到 worker 的 /command/result/<id>/log
+    """
+    node_id = (request.args.get('node_id') or '').strip()
+    if not node_id:
+        return {'error': 'node_id 参数必填'}, 400
+
     params = {}
-    val = request.args.get('stdout_offset')
-    if val is not None:
-        params['stdout_offset'] = val
+    for key in ('offset', 'limit', 'tail', 'raw'):
+        val = request.args.get(key)
+        if val is not None:
+            params[key] = val
 
     try:
         resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(
-            node_id, f'/command/result/{task_id}', params=params or None)
+            node_id, f'/command/result/{task_id}/log', params=params or None)
+        # raw 模式 → 透明转发纯文本，不解析 JSON
+        if request.args.get('raw'):
+            return resp.text, resp.status_code, {'Content-Type': resp.headers.get('Content-Type', 'text/plain')}
         return resp.json(), resp.status_code
     except ValueError as e:
         return {'error': str(e)}, 404

@@ -27,11 +27,38 @@ logger = logging.getLogger(__name__)
 command_bp = Blueprint('command', __name__)
 
 _raw_timeout = int(os.getenv('command_timeout', '0'))
-DEFAULT_TIMEOUT = _raw_timeout if _raw_timeout > 0 else None  # 0 或不设置 = 无超时限制
-# 已完成任务保留数量上限（FIFO 淘汰）
+DEFAULT_TIMEOUT = _raw_timeout if _raw_timeout > 0 else None
 MAX_COMPLETED_TASKS = int(os.getenv('command_max_completed', '200'))
-# 队列视图中展示的最近完成任务数
 QUEUE_RECENT_LIMIT = int(os.getenv('command_queue_recent', '30'))
+
+# 日志文件配置
+LOG_DIR = os.getenv('LOG_DIR', os.path.join(os.path.dirname(__file__), '..', 'logs', 'tasks'))
+MAX_LOG_SIZE = int(os.getenv('MAX_LOG_SIZE', str(2 * 1024 * 1024)))  # 默认 2MB
+
+
+def _truncate_log_tail(path: str):
+    """截断日志文件，只保留末尾 MAX_LOG_SIZE 字节。"""
+    try:
+        size = os.path.getsize(path)
+        if size > MAX_LOG_SIZE:
+            with open(path, 'rb') as f:
+                f.seek(size - MAX_LOG_SIZE)
+                tail = f.read()
+            with open(path, 'wb') as f:
+                f.write(tail)
+    except Exception as e:
+        logger.warning("日志截断失败 %s: %s", path, e)
+
+
+def _remove_log_file(task_id: str):
+    """删除任务日志文件（任务被删除时调用）。"""
+    log_path = os.path.join(LOG_DIR, f'{task_id}.log')
+    try:
+        if os.path.isfile(log_path):
+            os.remove(log_path)
+            logger.info("已删除日志文件 %s", log_path)
+    except Exception as e:
+        logger.warning("删除日志文件失败 %s: %s", log_path, e)
 
 
 # ==================================================================
@@ -154,28 +181,31 @@ def execute_in_sandbox(
         except Exception as e:
             logger.warning("join_sandbox 跳过 (进程可能已退出): %s", e)
 
-        # 4. 边跑边写日志：启动线程逐行读取 stdout，增量写入 DB
-        #    stderr 已在 shell 层 2>&1 合并到 stdout，无需单独读取
-        from executor.db import Database
-        db = Database.get_instance()
+        # 4. 边跑边写日志：启动线程读取 stdout，写入文件（非 DB）
         task_id = sandbox_name[4:] if sandbox_name.startswith('cmd_') else sandbox_name
 
         stdout_lines = []
+        os.makedirs(LOG_DIR, exist_ok=True)
+        log_path = os.path.join(LOG_DIR, f'{task_id}.log')
+        # 记录当前文件大小，用于后续 MAX_LOG_SIZE 截断判断
+        _log_file_size = [0]
 
         def _read_stdout():
-            # 按块读取而非按行——tqdm / 训练日志用 \r 刷新，没有 \n，
-            # readline() 会一直阻塞。read() 即到即返，不卡数据。
             try:
-                while True:
-                    chunk = proc.stdout.read(4096)
-                    if not chunk:
-                        break
-                    text = chunk.decode('utf-8', errors='replace')
-                    stdout_lines.append(text)
-                    try:
-                        db.append_task_output(task_id, 'stdout', text)
-                    except Exception as e:
-                        logger.warning("增量写日志失败 %s: %s", task_id, e)
+                with open(log_path, 'a') as f:
+                    while True:
+                        chunk = proc.stdout.read(4096)
+                        if not chunk:
+                            break
+                        text = chunk.decode('utf-8', errors='replace')
+                        stdout_lines.append(text)
+                        f.write(text)
+                        f.flush()
+                        _log_file_size[0] += len(chunk)
+                        # 超出限制则截断保留末尾
+                        if _log_file_size[0] > MAX_LOG_SIZE:
+                            _truncate_log_tail(log_path)
+                            _log_file_size[0] = min(_log_file_size[0], MAX_LOG_SIZE)
             except Exception as e:
                 logger.warning("读取 stdout 流异常: %s", e)
 
@@ -389,10 +419,11 @@ class TaskQueue:
                 pass
             self._reindex()
 
-        # 锁外：删 DB + 杀沙盒
+        # 锁外：删 DB + 杀沙盒 + 清理日志文件
         deleted = 0
         for tid in to_delete_db:
             self._db.delete_task(tid)
+            _remove_log_file(tid)
             deleted += 1
 
         sbx = SbxManager.get_instance()
@@ -403,6 +434,7 @@ class TaskQueue:
                 logger.warning('销毁沙盒 %s 失败: %s', tid, e)
             self._db.update_task_result(
                 tid, 'failed', -1, '', '', error='用户手动取消')
+            _remove_log_file(tid)
             deleted += 1
             logger.info('已取消运行中任务 %s', tid)
 
@@ -410,31 +442,14 @@ class TaskQueue:
             logger.info('批量删除 %s 个任务', deleted)
         return deleted
 
-    def get_result(self, task_id: str,
-                    stdout_offset: int = 0, stderr_offset: int = 0) -> dict | None:
-        """获取任务结果。user_id 仅作归属标记，不校验密码。
-
-        Args:
-            stdout_offset: 只返回 stdout 该偏移量之后的内容（增量拉取）
-            stderr_offset: 只返回 stderr 该偏移量之后的内容
-
-        Returns:
-            None 表示任务不存在
-            dict: 含 status、user_id 等公开字段 + result（日志片段）。
-        """
+    def get_result(self, task_id: str) -> dict | None:
+        """获取任务结果元数据（不含日志内容，日志走 /log 接口）。"""
         task = self._db.get_task(task_id)
         if task is None:
             return None
 
-        full_stdout = task.get('stdout') or ''
-        full_stderr = task.get('stderr') or ''
-
         public = self._format_public(task)
         public['result'] = {
-            'stdout': full_stdout[stdout_offset:],
-            'stderr': full_stderr[stderr_offset:],
-            'stdout_len': len(full_stdout),
-            'stderr_len': len(full_stderr),
             'returncode': task.get('returncode'),
             'timed_out': bool(task.get('timed_out')),
         }
@@ -492,12 +507,12 @@ class TaskQueue:
             finished_at = time.time()
             status = ('completed' if result.get('returncode') == 0
                       and not result.get('timed_out') else 'failed')
+            # 日志已存入文件，DB 只保留元数据
             self._db.update_task_result(
                 task_id=task['task_id'],
                 status=status,
                 returncode=result.get('returncode', -1),
-                stdout=result.get('stdout', ''),
-                stderr=result.get('stderr', ''),
+                stdout='', stderr='',
                 timed_out=result.get('timed_out', False),
                 error=result.get('error'),
                 finished_at=finished_at,
@@ -701,25 +716,66 @@ def get_queue():
 
 @command_bp.route('/result/<task_id>', methods=['GET'])
 def get_result(task_id: str):
-    """查看某个任务的完整结果。无需权限校验，所有用户均可查看。
-
-    Query params:
-        stdout_offset: 只返回 stdout 该偏移量之后的新内容（增量拉取）
-        stderr_offset: 只返回 stderr 该偏移量之后的新内容
-
-    响应: 任务完整信息（含 stdout/stderr 片段 + stdout_len/stderr_len）
-    """
+    """查看任务结果元数据（状态、返回码等，不含日志内容）。"""
     tq = TaskQueue.get_instance()
-    stdout_offset = _parse_int(request.args.get('stdout_offset'), 0)
-    stderr_offset = _parse_int(request.args.get('stderr_offset'), 0)
-    result = tq.get_result(task_id,
-                           stdout_offset=stdout_offset,
-                           stderr_offset=stderr_offset)
-
+    result = tq.get_result(task_id)
     if result is None:
         return {'error': '任务不存在'}, 404
-
     return result, 200
+
+
+@command_bp.route('/result/<task_id>/log', methods=['GET'])
+def get_result_log(task_id: str):
+    """获取任务日志文件内容。
+
+    Query params:
+        raw=1        返回纯文本 + Content-Length（前端进度条用）
+        tail=N        返回文件末尾 N 字节
+        offset=N&limit=M  返回从 offset 开始的 M 字节（默认 16KB）
+
+    默认 JSON: { "data": "<text>", "offset": N, "total_size": N }
+    raw 模式:  纯文本响应，带 Content-Length 头
+    """
+    log_path = os.path.join(LOG_DIR, f'{task_id}.log')
+    if not os.path.isfile(log_path):
+        if request.args.get('raw'):
+            return '', 200  # flask 自动 text/plain
+        return {'data': '', 'offset': 0, 'total_size': 0}, 200
+
+    file_size = os.path.getsize(log_path)
+    tail = _parse_int(request.args.get('tail'), 0)
+    offset = _parse_int(request.args.get('offset'), 0)
+    limit = _parse_int(request.args.get('limit'), 0)
+    raw_mode = request.args.get('raw')
+
+    if tail and tail > 0:
+        offset = max(0, file_size - tail)
+        limit = min(tail, file_size)
+    elif not limit and not offset:
+        # 没指定任何范围 → 全量返回
+        limit = file_size
+
+    offset = max(0, min(offset, file_size))
+    limit = max(1, min(limit, file_size - offset))
+
+    try:
+        with open(log_path, 'rb') as f:
+            f.seek(offset)
+            raw = f.read(limit)
+    except Exception as e:
+        logger.warning("读取日志文件失败 %s: %s", log_path, e)
+        return {'data': '', 'offset': 0, 'total_size': file_size, 'error': str(e)}, 500
+
+    if raw_mode:
+        text = raw.decode('utf-8', errors='replace')
+        return text, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+    data = raw.decode('utf-8', errors='replace')
+    return {
+        'data': data,
+        'offset': offset,
+        'total_size': file_size,
+    }, 200
 
 
 def _parse_int(value: str | None, default: int) -> int:
