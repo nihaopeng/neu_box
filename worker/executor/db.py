@@ -179,6 +179,17 @@ class Database:
              finished_at or time.time(), task_id))
         conn.commit()
 
+    def append_task_output(self, task_id: str, field: str, text: str):
+        """增量追加 stdout 或 stderr 文本。field 为 'stdout' 或 'stderr'。
+
+        用于任务执行过程中边跑边写日志，前端轮询可拉到部分输出。
+        """
+        conn = self._get_conn()
+        conn.execute(
+            f"UPDATE tasks SET {field} = COALESCE({field}, '') || ? WHERE task_id=?",
+            (text, task_id))
+        conn.commit()
+
     def update_position_batch(self, task_ids: list[str]):
         """批量更新 position（一次性更新所有排队任务的位置）。"""
         conn = self._get_conn()

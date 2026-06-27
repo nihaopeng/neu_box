@@ -161,6 +161,8 @@ function switchMode(mode) {
     logContent.style.display = 'none';
     logContent.innerHTML = '';
     logActions.style.display = 'none';
+    const logHeader = document.getElementById('logHeader');
+    if (logHeader) logHeader.style.display = 'none';
   } else if (mode === 'experiment') {
     terminalFields.style.display = 'none';
     commandFields.style.display = 'none';
@@ -174,6 +176,8 @@ function switchMode(mode) {
     logContent.style.display = 'none';
     logContent.innerHTML = '';
     logActions.style.display = 'none';
+    const logHeader2 = document.getElementById('logHeader');
+    if (logHeader2) logHeader2.style.display = 'none';
     // Load experiments and folders
     fetchFolders();
     fetchExperiments();

@@ -73,8 +73,9 @@ def execute_in_sandbox(
       1. 建沙盒（空壳）
       2. Popen(preexec_fn: 写 PID 到 cgroup.procs → setuid 切用户 → 返回)
       3. 更新 DB 记录（join_sandbox 做幂等确认）
-      4. communicate(timeout) 收集 stdout/stderr
-      5. 清理沙盒，返回结果
+      4. 启动线程逐行读取 stdout/stderr，增量写入 DB（前端可轮询拉取部分日志）
+      5. proc.wait(timeout) 等待进程结束
+      6. 清理沙盒，返回完整结果
     """
     sbx = SbxManager.get_instance()
 
@@ -121,11 +122,15 @@ def execute_in_sandbox(
 
     try:
         logger.warning("启动进程, cgroup=%s, user=%s", cg_procs, username or '(root)')
+        # bash -c 是非交互式 shell，不会自动 source ~/.bashrc
+        # 提前拼接，让用户的 PATH、conda 等环境变量在命令执行前生效
+        full_command = f'source ~/.bashrc 2>/dev/null; {command}'
         proc = subprocess.Popen(
-            ['bash', '-c', command],
+            ['bash', '-c', full_command],
             preexec_fn=preexec,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,   # 自动 decode，逐行读取用
         )
         logger.warning("子进程 PID=%s 已启动", proc.pid)
 
@@ -136,11 +141,41 @@ def execute_in_sandbox(
         except Exception as e:
             logger.warning("join_sandbox 跳过 (进程可能已退出): %s", e)
 
-        # 4. 等待命令执行完成
+        # 4. 边跑边写日志：启动线程逐行读取 stdout/stderr，增量写入 DB
+        #    这样前端轮询 /command/result 时可以拉到部分输出
+        from executor.db import Database
+        db = Database.get_instance()
+        # 从 sandbox_name 提取 task_id（格式: cmd_<task_id>）
+        task_id = sandbox_name[4:] if sandbox_name.startswith('cmd_') else sandbox_name
+
+        stdout_lines = []
+        stderr_lines = []
+        read_error = [None]  # 用列表包装，方便在线程中赋值
+
+        def _read_stream(stream, field, accumulator):
+            try:
+                for line in iter(stream.readline, ''):
+                    if line:
+                        accumulator.append(line)
+                        try:
+                            db.append_task_output(task_id, field, line)
+                        except Exception as e:
+                            logger.warning("增量写日志失败 %s/%s: %s", task_id, field, e)
+            except Exception as e:
+                read_error[0] = (field, str(e))
+
+        t_stdout = threading.Thread(
+            target=_read_stream, args=(proc.stdout, 'stdout', stdout_lines), daemon=True)
+        t_stderr = threading.Thread(
+            target=_read_stream, args=(proc.stderr, 'stderr', stderr_lines), daemon=True)
+        t_stdout.start()
+        t_stderr.start()
+
+        # 5. 等待进程结束（带超时）
         logger.warning("等待 PID=%s 完成 (timeout=%ss)", proc.pid, timeout)
+        timed_out = False
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            timed_out = False
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
             logger.warning("PID=%s 超时，正在终止...", proc.pid)
@@ -153,13 +188,20 @@ def execute_in_sandbox(
                     proc.wait(timeout=5)
                 except Exception:
                     pass
-            stdout, stderr = proc.communicate()
+
+        # 等待读取线程结束（进程退出后 readline 会收到 EOF 自动退出）
+        t_stdout.join(timeout=5)
+        t_stderr.join(timeout=5)
+
+        if read_error[0]:
+            field, err = read_error[0]
+            logger.warning("读取 %s 流时异常: %s", field, err)
 
         logger.warning("PID=%s 完成, rc=%s", proc.pid, proc.returncode)
         return {
             'returncode': proc.returncode if not timed_out else -1,
-            'stdout': stdout.decode('utf-8', errors='replace'),
-            'stderr': stderr.decode('utf-8', errors='replace'),
+            'stdout': ''.join(stdout_lines),
+            'stderr': ''.join(stderr_lines),
             'timed_out': timed_out,
             'error': None,
         }

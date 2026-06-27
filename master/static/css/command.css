@@ -139,6 +139,23 @@
 .queue-status.failed   { color: var(--danger); background: rgba(255,59,48,.1); }
 
 
+/* ── Log header bar ─────────────────────────────────────────── */
+
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.log-header-title {
+  font-size: 12px;
+  color: var(--sub);
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+}
+
 /* ── Log viewer (command mode) ──────────────────────────────── */
 
 .log-viewer {

@@ -15,13 +15,13 @@ function renderQueue(data) {
     const isRunning = task.status === 'running';
     const posText = isRunning ? '▶' : (task.position || '?');
     const isDone = task.status === 'completed' || task.status === 'failed';
-    const clickable = isDone;
+    const clickable = isDone || isRunning;  // 运行中任务也可点击，查看增量日志
 
     return `
       <div class="queue-item ${isRunning ? 'running' : ''} ${clickable ? 'clickable' : ''}"
            data-task-id="${task.task_id}"
            data-user-id="${escapeHtml(task.user_id)}"
-           title="${clickable ? '点击查看日志' : ''}">
+           title="${isDone ? '点击查看日志' : (isRunning ? '点击查看实时日志' : '')}">
         <input type="checkbox" class="queue-check" data-task-id="${task.task_id}" title="选择">
         <span class="queue-pos">${posText}</span>
         <span class="queue-user" title="${escapeHtml(task.user_id)}">${escapeHtml(task.user_id)}</span>
@@ -150,6 +150,10 @@ async function viewTaskLog(taskId) {
     switchMode('command');
   }
 
+  // 显示日志 header
+  logHeader.style.display = '';
+  logHeaderTitle.textContent = `任务日志: ${taskId}`;
+
   logPlaceholder.style.display = 'none';
   logContent.style.display = '';
   logContent.innerHTML = '<div style="color:#636366">加载中…</div>';
@@ -230,6 +234,7 @@ async function viewTaskLog(taskId) {
     }
 
     logContent.innerHTML = html;
+
     // 显示「保存为实验记录」按钮（仅当任务已完成或失败时）
     if (task.status === 'completed' || task.status === 'failed') {
       logActions.style.display = '';
@@ -242,6 +247,22 @@ async function viewTaskLog(taskId) {
     logActions.style.display = 'none';
   }
 }
+
+
+// ── 日志刷新按钮 ─────────────────────────────────────────────
+const logHeader = document.getElementById('logHeader');
+const logHeaderTitle = document.getElementById('logHeaderTitle');
+const logRefreshBtn = document.getElementById('logRefreshBtn');
+
+logRefreshBtn.addEventListener('click', () => {
+  logRefreshBtn.classList.add('spinning');
+  if (_currentTaskData && _currentTaskData.task_id) {
+    viewTaskLog(_currentTaskData.task_id).finally(() =>
+      logRefreshBtn.classList.remove('spinning'));
+  } else {
+    logRefreshBtn.classList.remove('spinning');
+  }
+});
 
 
 async function submitCommand() {
