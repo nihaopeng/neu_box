@@ -88,16 +88,23 @@ def queue():
 def result(task_id: str):
     """查看任务结果，无需权限校验。
 
-    Query: ?node_id=xxx
+    Query: ?node_id=xxx&stdout_offset=N&stderr_offset=N
     """
     node_id = (request.args.get('node_id') or '').strip()
 
     if not node_id:
         return {'error': 'node_id 参数必填'}, 400
 
+    # 转发增量拉取参数到 worker
+    params = {}
+    for key in ('stdout_offset', 'stderr_offset'):
+        val = request.args.get(key)
+        if val is not None:
+            params[key] = val
+
     try:
         resp = Nodes_Pool.get_nodes_pool().forward_get_to_node(
-            node_id, f'/command/result/{task_id}')
+            node_id, f'/command/result/{task_id}', params=params or None)
         return resp.json(), resp.status_code
     except ValueError as e:
         return {'error': str(e)}, 404

@@ -34,6 +34,9 @@ import sqlite3
 import threading
 import time
 
+# 单条日志（stdout / stderr）最大字节数，超出后截断前半部分保留末尾
+_MAX_LOG_SIZE = int(os.getenv('MAX_LOG_SIZE', str(2 * 1024 * 1024)))  # 默认 2MB
+
 
 class Database:
     """SQLite 数据库单例（线程安全）。"""
@@ -183,11 +186,17 @@ class Database:
         """增量追加 stdout 或 stderr 文本。field 为 'stdout' 或 'stderr'。
 
         用于任务执行过程中边跑边写日志，前端轮询可拉到部分输出。
+        追加后若总长度超出 MAX_LOG_SIZE 则截断前半部分，保留末尾。
         """
         conn = self._get_conn()
         conn.execute(
             f"UPDATE tasks SET {field} = COALESCE({field}, '') || ? WHERE task_id=?",
             (text, task_id))
+        # 超出限制则截断：保留末尾 MAX_LOG_SIZE 字节
+        conn.execute(
+            f"UPDATE tasks SET {field} = SUBSTR({field}, -?) "
+            f"WHERE task_id=? AND LENGTH(COALESCE({field}, '')) > ?",
+            (_MAX_LOG_SIZE, task_id, _MAX_LOG_SIZE))
         conn.commit()
 
     def update_position_batch(self, task_ids: list[str]):

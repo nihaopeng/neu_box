@@ -58,8 +58,43 @@ _cg_join() {
     echo "$pid" > "$(_cg_procs "$name")"
 }
 _cg_kickall() {
-    local name="$1" procs p
-    procs=$(cat "$(_cg_procs "$name")" 2>/dev/null || true)
+    # 旧名保留，内部转发到 _cg_kill_all
+    _cg_kill_all "$@"
+}
+_cg_kill_all() {
+    # 可靠地杀死 cgroup 内所有进程，确保 destroy 时不残留。
+    # 流程: freeze → cgroup.kill → 等待清空 → fallback 迁回根 cgroup
+    local name="$1" cg procs waited
+    cg=$(_cg "$name")
+    [ -d "$cg" ] || return 0
+
+    # 1. Freeze — 原子冻结 cgroup 内所有进程
+    if [ -f "$cg/cgroup.freeze" ]; then
+        echo 1 > "$cg/cgroup.freeze" 2>/dev/null || true
+        waited=0
+        while [ $waited -lt 20 ]; do
+            local frozen
+            frozen=$(grep "^frozen " "$cg/cgroup.events" 2>/dev/null | awk '{print $2}')
+            [ "$frozen" = "1" ] && break
+            sleep 0.1
+            waited=$((waited + 1))
+        done
+    fi
+
+    # 2. Kill — 内核向 cgroup 内所有进程发 SIGKILL，无竞态
+    if [ -f "$cg/cgroup.kill" ]; then
+        echo 1 > "$cg/cgroup.kill" 2>/dev/null || true
+        waited=0
+        while [ $waited -lt 30 ]; do
+            procs=$(cat "$cg/cgroup.procs" 2>/dev/null || true)
+            [ -z "$procs" ] && break
+            sleep 0.1
+            waited=$((waited + 1))
+        done
+    fi
+
+    # 3. Fallback: 如果有残留，迁回根 cgroup 以免 rmdir 失败
+    procs=$(cat "$cg/cgroup.procs" 2>/dev/null || true)
     for p in $procs; do
         echo "$p" > "$(_cg_root_procs)" 2>/dev/null || true
     done

@@ -26,7 +26,8 @@ from executor.sbx_manager import SbxManager
 logger = logging.getLogger(__name__)
 command_bp = Blueprint('command', __name__)
 
-DEFAULT_TIMEOUT = int(os.getenv('command_timeout', '300'))
+_raw_timeout = int(os.getenv('command_timeout', '0'))
+DEFAULT_TIMEOUT = _raw_timeout if _raw_timeout > 0 else None  # 0 或不设置 = 无超时限制
 # 已完成任务保留数量上限（FIFO 淘汰）
 MAX_COMPLETED_TASKS = int(os.getenv('command_max_completed', '200'))
 # 队列视图中展示的最近完成任务数
@@ -64,7 +65,7 @@ def execute_in_sandbox(
     cpu: int = 0,
     mem: str = "0",
     devices: list = None,
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: int | None = DEFAULT_TIMEOUT,
     username: str = '',
 ) -> dict:
     """在沙盒中以指定用户身份安全执行一条命令。
@@ -404,21 +405,31 @@ class TaskQueue:
             logger.info('批量删除 %s 个任务', deleted)
         return deleted
 
-    def get_result(self, task_id: str) -> dict | None:
+    def get_result(self, task_id: str,
+                    stdout_offset: int = 0, stderr_offset: int = 0) -> dict | None:
         """获取任务结果。user_id 仅作归属标记，不校验密码。
+
+        Args:
+            stdout_offset: 只返回 stdout 该偏移量之后的内容（增量拉取）
+            stderr_offset: 只返回 stderr 该偏移量之后的内容
 
         Returns:
             None 表示任务不存在
-            dict: 含 status、user_id 等公开字段 + result（日志）。
+            dict: 含 status、user_id 等公开字段 + result（日志片段）。
         """
         task = self._db.get_task(task_id)
         if task is None:
             return None
 
+        full_stdout = task.get('stdout') or ''
+        full_stderr = task.get('stderr') or ''
+
         public = self._format_public(task)
         public['result'] = {
-            'stdout': task.get('stdout') or '',
-            'stderr': task.get('stderr') or '',
+            'stdout': full_stdout[stdout_offset:],
+            'stderr': full_stderr[stderr_offset:],
+            'stdout_len': len(full_stdout),
+            'stderr_len': len(full_stderr),
             'returncode': task.get('returncode'),
             'timed_out': bool(task.get('timed_out')),
         }
@@ -687,15 +698,33 @@ def get_queue():
 def get_result(task_id: str):
     """查看某个任务的完整结果。无需权限校验，所有用户均可查看。
 
-    响应: 任务完整信息（含 stdout/stderr）
+    Query params:
+        stdout_offset: 只返回 stdout 该偏移量之后的新内容（增量拉取）
+        stderr_offset: 只返回 stderr 该偏移量之后的新内容
+
+    响应: 任务完整信息（含 stdout/stderr 片段 + stdout_len/stderr_len）
     """
     tq = TaskQueue.get_instance()
-    result = tq.get_result(task_id)
+    stdout_offset = _parse_int(request.args.get('stdout_offset'), 0)
+    stderr_offset = _parse_int(request.args.get('stderr_offset'), 0)
+    result = tq.get_result(task_id,
+                           stdout_offset=stdout_offset,
+                           stderr_offset=stderr_offset)
 
     if result is None:
         return {'error': '任务不存在'}, 404
 
     return result, 200
+
+
+def _parse_int(value: str | None, default: int) -> int:
+    """安全解析整型 query param，解析失败返回默认值。"""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
 
 
 # ── 启动 TaskQueue（在 import 时自动启动） ──
