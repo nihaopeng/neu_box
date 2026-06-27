@@ -206,7 +206,7 @@ _ensure_bpf_ready() {
     if _bpf_is_loaded && ! _bpf_is_attached; then
         echo "[bpf] BPF 程序已加载但未挂载，重新挂载..."
         bpftool cgroup attach "$CGROUP_ROOT" $BPF_DEV_TYPE \
-            pinned "$BPF_PIN"|| die "BPF 挂载到 root cgroup 失败"
+            pinned "$BPF_PIN" multi || die "BPF 挂载到 root cgroup 失败"
         echo "[bpf] ✓ 已挂载"
         return
     fi
@@ -224,7 +224,7 @@ _ensure_bpf_ready() {
 
     echo "[bpf] 挂载 BPF 到 root cgroup ..."
     bpftool cgroup attach "$CGROUP_ROOT" $BPF_DEV_TYPE \
-        pinned "$BPF_PIN"|| die "BPF 挂载到 root cgroup 失败"
+        pinned "$BPF_PIN" multi || die "BPF 挂载到 root cgroup 失败"
     echo "[bpf] ✓ 已挂载"
 }
 
@@ -245,7 +245,7 @@ cmd_load() {
     echo "✓ BPF 程序已加载"
     ls -l "$MAP_DIR/"
     bpftool cgroup attach "$CGROUP_ROOT" $BPF_DEV_TYPE \
-        pinned "$BPF_PIN" || die "BPF 挂载失败"
+        pinned "$BPF_PIN" multi || die "BPF 挂载失败"
     echo "✓ 已挂载到 root cgroup"
 }
 
