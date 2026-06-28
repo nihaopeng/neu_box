@@ -100,16 +100,56 @@ neu-sbox() {
             echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
             ;;
 
-        result|res)
+        result|res|log|l)
             local task_id="${2:-}"
             if [ -z "$task_id" ]; then
                 echo "用法: neu-sbox result <task_id>"
                 return 1
             fi
-            echo "[neu-sbox] 任务 ${task_id} 结果:"
-            local resp
-            resp=$(curl -s "${WORKER_URL}/command/result/${task_id}")
-            echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+
+            local meta log_text
+            meta=$(curl -s "${WORKER_URL}/command/result/${task_id}")
+            log_text=$(curl -s "${WORKER_URL}/command/result/${task_id}/log?raw=1")
+
+            # 解析元数据
+            local status cmd user cpu mem devices created retcode timed_out
+            status=$(echo "$meta"   | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'))" 2>/dev/null)
+            cmd=$(echo "$meta"      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('command','?'))" 2>/dev/null)
+            user=$(echo "$meta"     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('user_id','?'))" 2>/dev/null)
+            cpu=$(echo "$meta"      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('cpu',0))" 2>/dev/null)
+            mem=$(echo "$meta"      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('mem','0'))" 2>/dev/null)
+            devices=$(echo "$meta"  | python3 -c "import sys,json; d=json.load(sys.stdin); print(','.join(d.get('devices',[])) or '-')" 2>/dev/null)
+            created=$(echo "$meta"  | python3 -c "import sys,json; d=json.load(sys.stdin); import datetime; ts=d.get('created_at'); print(datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S') if ts else '?')" 2>/dev/null)
+            retcode=$(echo "$meta"  | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('returncode','?'))" 2>/dev/null)
+            timed_out=$(echo "$meta" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print('是' if r.get('timed_out') else '否')" 2>/dev/null)
+
+            # 状态着色
+            local status_label
+            case "$status" in
+                completed) status_label="✓ 已完成" ;;
+                failed)    status_label="✗ 失败"   ;;
+                running)   status_label="▶ 执行中" ;;
+                queued)    status_label="○ 排队中" ;;
+                *)         status_label="$status"   ;;
+            esac
+
+            if [ -n "$log_text" ]; then
+                echo "$log_text"
+            else
+                echo "(无输出)"
+            fi
+            echo ""
+            echo "══════════════════════════════════════════════"
+            echo "  任务: ${task_id}"
+            echo "══════════════════════════════════════════════"
+            echo "  状态:     ${status_label}"
+            echo "  用户:     ${user}"
+            echo "  命令:     ${cmd}"
+            echo "  资源:     CPU=${cpu}  内存=${mem}  设备=${devices}"
+            echo "  提交时间: ${created}"
+            echo "  返回码:   ${retcode}"
+            echo "  超时:     ${timed_out}"
+            echo "══════════════════════════════════════════════"
             ;;
 
         *)
@@ -123,7 +163,7 @@ neu-sbox() {
             echo "  list                                     列出我的沙盒"
             echo "  status                                   查看当前 shell 沙盒状态"
             echo "  tasks                                    查看任务队列"
-            echo "  result <task_id>                         查看任务执行结果"
+            echo "  result <task_id>                         查看任务结果和日志"
             echo ""
             echo "示例:"
             echo "  neu-sbox acquire 1                       # 申请 1 个 NPU 沙盒"

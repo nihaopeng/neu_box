@@ -7,7 +7,7 @@ const state = {
   cpu:        0,
   memory:     0,
   memUnit:    'GB',
-  device_num: 0,
+  device_num: 1,
   cmdUserId:  localStorage.getItem('neu_box_cmd_user') || '',
 };
 

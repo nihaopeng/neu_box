@@ -33,21 +33,6 @@ QUEUE_RECENT_LIMIT = int(os.getenv('command_queue_recent', '30'))
 
 # 日志文件配置
 LOG_DIR = os.getenv('LOG_DIR', os.path.join(os.path.dirname(__file__), '..', 'logs', 'tasks'))
-MAX_LOG_SIZE = int(os.getenv('MAX_LOG_SIZE', str(2 * 1024 * 1024)))  # 默认 2MB
-
-
-def _truncate_log_tail(path: str):
-    """截断日志文件，只保留末尾 MAX_LOG_SIZE 字节。"""
-    try:
-        size = os.path.getsize(path)
-        if size > MAX_LOG_SIZE:
-            with open(path, 'rb') as f:
-                f.seek(size - MAX_LOG_SIZE)
-                tail = f.read()
-            with open(path, 'wb') as f:
-                f.write(tail)
-    except Exception as e:
-        logger.warning("日志截断失败 %s: %s", path, e)
 
 
 def _remove_log_file(task_id: str):
@@ -187,8 +172,6 @@ def execute_in_sandbox(
         stdout_lines = []
         os.makedirs(LOG_DIR, exist_ok=True)
         log_path = os.path.join(LOG_DIR, f'{task_id}.log')
-        # 记录当前文件大小，用于后续 MAX_LOG_SIZE 截断判断
-        _log_file_size = [0]
 
         def _read_stdout():
             try:
@@ -201,11 +184,6 @@ def execute_in_sandbox(
                         stdout_lines.append(text)
                         f.write(text)
                         f.flush()
-                        _log_file_size[0] += len(chunk)
-                        # 超出限制则截断保留末尾
-                        if _log_file_size[0] > MAX_LOG_SIZE:
-                            _truncate_log_tail(log_path)
-                            _log_file_size[0] = min(_log_file_size[0], MAX_LOG_SIZE)
             except Exception as e:
                 logger.warning("读取 stdout 流异常: %s", e)
 
