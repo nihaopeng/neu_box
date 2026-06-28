@@ -12,17 +12,17 @@ load_dotenv()
 # 用 sudo 启动 Worker 时自动完成，无需额外操作
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _sbox_src = os.path.join(_script_dir, 'scripts', 'client', 'neu-sbox.sh')
-_sbox_dst = '/etc/profile.d/neu-sbox.sh'
+_sbox_dst = '/usr/local/bin/neu-sbox'
 if os.path.isfile(_sbox_src):
     try:
         import shutil
         shutil.copy2(_sbox_src, _sbox_dst)
-        os.chmod(_sbox_dst, 0o644)
-        print(f'[init] neu-sbox.sh 已安装到 {_sbox_dst}')
+        os.chmod(_sbox_dst, 0o755)
+        print(f'[init] neu-sbox 已安装到 {_sbox_dst}')
     except PermissionError:
         print(f'[init] 警告: 无法写入 {_sbox_dst}，请用 sudo 启动或手动安装')
     except Exception as e:
-        print(f'[init] 警告: 安装 neu-sbox.sh 失败: {e}')
+        print(f'[init] 警告: 安装 neu-sbox 失败: {e}')
 
 # ── 集中日志配置 ─────────────────────────────────────────────
 _log_dir = os.getenv('task_log_dir', os.path.join(os.path.dirname(__file__), 'logs'))
