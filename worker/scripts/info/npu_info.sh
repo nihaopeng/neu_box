@@ -5,7 +5,7 @@
 #
 # 输入: 无
 # 输出 (stdout): JSON
-#   {"total": <int>, "idle": <int>}
+#   {"total": <int>, "idle": <int>, "busy_ids": [<int>, ...]}
 #
 # 退出码: 始终为 0
 #
@@ -17,20 +17,20 @@
 #
 # 示例:
 #   $ ./npu_info.sh
-#   {"total":8,"idle":8}
+#   {"total":8,"idle":8,"busy_ids":[]}
 #
 #   $ ./npu_info.sh
-#   {"total":0,"idle":0}
+#   {"total":8,"idle":6,"busy_ids":[0,3]}
 # ============================================================
 
 if ! command -v npu-smi &>/dev/null; then
-    echo '{"total":0,"idle":0}'
+    echo '{"total":0,"idle":0,"busy_ids":[]}'
     exit 0
 fi
 
 output=$(npu-smi info 2>/dev/null)
 if [ $? -ne 0 ] || [ -z "$output" ]; then
-    echo '{"total":0,"idle":0}'
+    echo '{"total":0,"idle":0,"busy_ids":[]}'
     exit 0
 fi
 
@@ -48,7 +48,6 @@ while IFS= read -r line; do
     [[ "$line" =~ NPU ]] && continue
     [[ "$line" =~ Name ]] && continue
     [[ "$line" =~ Chip ]] && continue
-    # 每 2 行为一颗芯片，奇数行(row_idx%2==1)是使用率行，在此计数
     if [ $((row_idx % 2)) -eq 1 ]; then
         total=$((total + 1))
     fi
@@ -72,10 +71,18 @@ while IFS= read -r line; do
     fi
 done <<< "$output"
 
-# ── 计算 idle: 无进程占用即为空闲 ──
+# ── 计算 idle ──
 idle=0
+busy_json="["
+first=1
 for ((i=0; i<total; i++)); do
-    [ -z "${busy_chips[$i]}" ] && idle=$((idle + 1))
+    if [ -z "${busy_chips[$i]}" ]; then
+        idle=$((idle + 1))
+    else
+        if [ "$first" -eq 1 ]; then first=0; else busy_json+=","; fi
+        busy_json+="$i"
+    fi
 done
+busy_json+="]"
 
-echo "{\"total\":$total,\"idle\":$idle}"
+echo "{\"total\":$total,\"idle\":$idle,\"busy_ids\":$busy_json}"

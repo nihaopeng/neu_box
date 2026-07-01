@@ -120,11 +120,41 @@ class SbxManager:
         """返回所有沙盒名称列表（兼容旧 SandboxDB.list_all 接口）。"""
         return [s['name'] for s in self.db.list_sandboxes()]
 
+    def _get_external_busy_minors(self) -> set:
+        """调用 dev_info_script_path 脚本，返回外部进程占用的设备 minor 号集合。"""
+        path = os.getenv('dev_info_script_path', '')
+        if not path:
+            return set()
+        try:
+            out = subprocess.check_output(
+                [path], timeout=10, stderr=subprocess.DEVNULL)
+            data = json.loads(out.decode())
+            return set(data.get('busy_ids', []))
+        except Exception:
+            return set()
+
     def _get_free_devices(self) -> List[str]:
-        """返回当前空闲的设备节点列表（全部 - 已分配），按 minor 排序。"""
+        """返回当前空闲的设备节点列表，按 minor 排序。
+
+        过滤规则:
+          1. 沙盒 DB 已分配的 → 排除
+          2. 外部进程占用的（info 脚本返回的 busy_ids）→ 排除
+        """
         all_devices = set(self._discover_device_nodes())
         allocated = self._get_allocated_devices()
         free = sorted(all_devices - allocated, key=lambda x: int(x.split(':')[1]))
+
+        busy_minors = self._get_external_busy_minors()
+        if busy_minors:
+            truly_free = []
+            for dev_id in free:
+                minor = int(dev_id.split(':')[1])
+                if minor in busy_minors:
+                    logger.warning("设备 %s 被外部进程占用，跳过", dev_id)
+                else:
+                    truly_free.append(dev_id)
+            return truly_free
+
         return free
 
     # ── 启动恢复 ─────────────────────────────────────────────────
