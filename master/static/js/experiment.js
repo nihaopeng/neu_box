@@ -244,8 +244,11 @@ function blockEditHtml(block, index) {
       </div>`;
   }
   if (block.type === 'task') {
+    const hasRef = block.task_id;
+    const inlineLog = block.log || '';
+    const refAttrs = hasRef ? `data-task-id="${escapeHtml(block.task_id)}" data-node-id="${escapeHtml(block.node_id || '')}"` : '';
     return `
-      <div class="nb-block" data-block-idx="${index}">
+      <div class="nb-block" data-block-idx="${index}" ${refAttrs}>
         <button class="nb-block-del" data-idx="${index}" title="删除">×</button>
         <div class="nb-task-fields">
           <div class="nb-task-header">
@@ -253,8 +256,17 @@ function blockEditHtml(block, index) {
                    value="${escapeHtml(block.command || '')}" placeholder="命令，如 python train.py --lr 0.01">
             <button class="nb-task-toggle" data-idx="${index}" title="收起/展开日志">▶</button>
           </div>
+          ${hasRef ? `
+          <div class="nb-task-ref">
+            <span class="nb-task-ref-label">任务引用: ${escapeHtml(block.task_id)} @ ${escapeHtml(block.node_id || '?')}</span>
+            <button class="submit-btn nb-task-load" data-idx="${index}" style="padding:2px 10px;font-size:11px">加载日志</button>
+          </div>
           <textarea class="nb-textarea terminal-box nb-task-log collapsed" data-idx="${index}" data-field="log"
-                    placeholder="日志输出…">${escapeHtml(block.log || '')}</textarea>
+                    placeholder="点击加载日志…" readonly></textarea>
+          ` : `
+          <textarea class="nb-textarea terminal-box nb-task-log collapsed" data-idx="${index}" data-field="log"
+                    placeholder="日志输出…">${escapeHtml(inlineLog)}</textarea>
+          `}
         </div>
       </div>`;
   }
@@ -276,14 +288,18 @@ function blockPreviewHtml(block, index) {
   }
   if (block.type === 'task') {
     const cmd = escapeHtml(block.command || '');
-    const log = block.log || '';
-    const hasLog = log && log.trim();
+    const hasRef = block.task_id;
+    const inlineLog = block.log || '';
+    const hasContent = hasRef || (inlineLog && inlineLog.trim());
     return `
       <div class="nb-block" data-block-idx="${index}">
-        <div class="nb-task-preview-cmd nb-task-cmd-toggle ${hasLog ? 'has-log' : ''}">
-          ${hasLog ? '<span class="nb-toggle-arrow">▶</span> ' : ''}${cmd || '<span style="color:var(--sub);font-style:italic">无命令</span>'}
+        <div class="nb-task-preview-cmd nb-task-cmd-toggle ${hasContent ? 'has-log' : ''}">
+          ${hasContent ? '<span class="nb-toggle-arrow">▶</span> ' : ''}${cmd || '<span style="color:var(--sub);font-style:italic">无命令</span>'}
         </div>
-        ${hasLog ? `<div class="nb-task-preview-log" style="display:none">${escapeHtml(log)}</div>` : ''}
+        <div class="nb-task-preview-log" style="display:none" data-block-idx="${index}"
+             ${hasRef ? `data-task-id="${escapeHtml(block.task_id)}" data-node-id="${escapeHtml(block.node_id || '')}"` : ''}>
+          ${hasRef ? '<div class="nb-log-placeholder">点击展开以加载日志…</div>' : escapeHtml(inlineLog)}
+        </div>
       </div>`;
   }
   return '';
@@ -346,6 +362,45 @@ function bindNotebookEvents() {
     });
   });
 
+  // 加载日志按钮（引用模式，edit 视图）
+  document.querySelectorAll('.nb-task-load').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const idx = parseInt(btn.dataset.idx);
+      const block = document.querySelector(`.nb-block[data-block-idx="${idx}"]`);
+      if (!block) return;
+      const logEl = block.querySelector('.nb-task-log');
+      if (!logEl) return;
+      const taskId = block.dataset.taskId;
+      const nodeId = block.dataset.nodeId || state.selectedNodeId;
+      if (!taskId) return;
+      btn.textContent = '加载中…';
+      btn.disabled = true;
+      try {
+        const r = await fetch(
+          `/command/result/${taskId}/log?node_id=${encodeURIComponent(nodeId)}&raw=1`);
+        if (r.ok) {
+          const text = await r.text();
+          logEl.value = _handleCR(text);
+          logEl.readOnly = false;
+          logEl.placeholder = '日志输出…';
+          // 展开
+          logEl.classList.remove('collapsed');
+          const toggle = block.querySelector('.nb-task-toggle');
+          if (toggle) toggle.textContent = '▼';
+          logEl.style.height = 'auto';
+          logEl.style.height = Math.max(44, logEl.scrollHeight) + 'px';
+          btn.textContent = '已加载';
+        } else {
+          btn.textContent = '加载失败';
+          btn.disabled = false;
+        }
+      } catch {
+        btn.textContent = '加载失败';
+        btn.disabled = false;
+      }
+    });
+  });
+
   // 日志收起/展开
   document.querySelectorAll('.nb-task-toggle').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -355,16 +410,16 @@ function bindNotebookEvents() {
       if (!logEl) return;
       const collapsed = logEl.classList.toggle('collapsed');
       btn.textContent = collapsed ? '▶' : '▼';
-      if (!collapsed) {
-        // 展开后刷新自动高度
+      if (!collapsed && !logEl.readOnly) {
         logEl.style.height = 'auto';
         logEl.style.height = Math.max(44, logEl.scrollHeight) + 'px';
       }
     });
   });
 
-  // Textarea auto-height
+  // Textarea auto-height（跳过只读引用和已折叠的）
   document.querySelectorAll('.nb-textarea').forEach(ta => {
+    if (ta.readOnly || ta.classList.contains('collapsed')) return;
     ta.style.height = 'auto';
     ta.style.height = Math.max(44, ta.scrollHeight) + 'px';
     ta.addEventListener('input', () => {
@@ -436,11 +491,19 @@ function collectNotebookBlocks() {
     const cmdInput = el.querySelector('.nb-task-cmd');
     if (cmdInput) {
       const logEl = el.querySelector('[data-field="log"]');
-      blocks.push({
-        type: 'task',
-        command: cmdInput.value,
-        log: logEl ? logEl.value : '',
-      });
+      const taskId = el.dataset.taskId;
+      const nodeId = el.dataset.nodeId;
+      const block = { type: 'task', command: cmdInput.value };
+      if (taskId) {
+        // 引用模式：保留 task_id + node_id，日志可选
+        block.task_id = taskId;
+        block.node_id = nodeId || '';
+        if (logEl && logEl.value) block.log = logEl.value;
+      } else {
+        // 内联模式（兼容旧数据）
+        block.log = logEl ? logEl.value : '';
+      }
+      blocks.push(block);
     } else if (ta) {
       blocks.push({ type: 'text', content: ta.value });
     }
@@ -517,16 +580,12 @@ function showTaskPicker(pos, expData) {
         resultEl.innerHTML = `<span style="color:#ff5f57">${escapeHtml(task.error)}</span>`;
         return;
       }
-      const logParts = [];
-      if (task.result) {
-        if (task.result.stdout) logParts.push(task.result.stdout);
-        if (task.result.stderr) logParts.push(task.result.stderr);
-      }
       const blocks = expData.blocks || [];
       blocks.splice(pos, 0, {
         type: 'task',
         command: task.command || '',
-        log: logParts.join('\n'),
+        task_id: taskId,
+        node_id: nodeId,
       });
       expData.blocks = blocks;
       renderNotebookBlocks(expData);
@@ -860,16 +919,14 @@ async function saveExperiment() {
   const tagsRaw = expTags.value.trim();
   const tags = tagsRaw ? tagsRaw.split(/[,，]/).map(t => t.trim()).filter(Boolean) : [];
 
-  // 构建 blocks：如果有日志则一个 task block
+  // 构建 blocks：只存引用（task_id + node_id），不存日志正文
   const blocks = [];
   if (_currentTaskData && _currentTaskData.task_result) {
-    const tr = _currentTaskData.task_result;
-    const result = tr.result || {};
-    const logText = [result.stdout || '', result.stderr || ''].join('\n').trim();
     blocks.push({
       type: 'task',
       command: _currentTaskData.command || '',
-      log: logText,
+      task_id: _currentTaskData.task_id,
+      node_id: _currentTaskData.node_id,
     });
   }
 
@@ -945,15 +1002,36 @@ expSearchInput.addEventListener('input', () => {
 // Init
 // ═══════════════════════════════════════════════════════════════
 
-// ── 日志折叠（全局委托，只绑定一次） ──
-document.getElementById('logContent').addEventListener('click', (e) => {
+// ── 日志折叠（全局委托） + 引用模式懒加载 ──
+document.getElementById('logContent').addEventListener('click', async (e) => {
   const toggle = e.target.closest('.nb-task-cmd-toggle.has-log');
   if (!toggle) return;
   const block = toggle.closest('.nb-block');
   const logEl = block ? block.querySelector('.nb-task-preview-log') : null;
   const arrow = toggle.querySelector('.nb-toggle-arrow');
   if (!logEl || !arrow) return;
-  if (logEl.style.display === 'none') {
+
+  const isHidden = logEl.style.display === 'none';
+  if (isHidden) {
+    // 引用模式：首次展开时从 worker 懒加载日志
+    const taskId = logEl.dataset.taskId;
+    if (taskId && logEl.querySelector('.nb-log-placeholder')) {
+      const nodeId = logEl.dataset.nodeId || state.selectedNodeId;
+      logEl.innerHTML = '<span style="color:var(--sub)">加载中…</span>';
+      try {
+        const r = await fetch(
+          `/command/result/${taskId}/log?node_id=${encodeURIComponent(nodeId)}&raw=1`);
+        if (r.ok) {
+          const text = await r.text();
+          // 处理 \r 进度条 + innerHTML 保留 \n 换行，只转义 < > &
+          logEl.innerHTML = _handleCR(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        } else {
+          logEl.textContent = '(加载失败)';
+        }
+      } catch {
+        logEl.textContent = '(加载失败)';
+      }
+    }
     logEl.style.display = '';
     arrow.classList.add('expanded');
   } else {

@@ -137,11 +137,9 @@ def execute_in_sandbox(
 
     try:
         logger.warning("启动进程, cgroup=%s, user=%s", cg_procs, username or '(root)')
-        # bash -c 是非交互式 shell，不会自动 source ~/.bashrc
-        # 提前拼接，让用户的 PATH、conda 等环境变量在命令执行前生效
-        # exec 2>&1 把 bash 的 stderr 全局合并到 stdout，保证 && 链中所有命令的
-        # 报错（如 conda: command not found）也能被捕获，且保持时间序
-        full_command = f'source ~/.bashrc 2>/dev/null; exec 2>&1; {command}'
+        # bash -i 交互模式：自动 source ~/.bashrc 完整内容（绕过开头的 *i* guard）
+        # exec 2>&1 把 bash 的 stderr 全局合并到 stdout
+        full_command = f'exec 2>&1; {command}'
         # PYTHONUNBUFFERED=1 强制 Python 子进程行缓冲输出
         # bufsize=1 确保 Python 端管道行缓冲，数据即到即读
         # 注意: 传 env dict 时 execve 会绕过 preexec_fn 的 os.environ 修改，
@@ -150,7 +148,7 @@ def execute_in_sandbox(
         if username:
             popen_env['HOME'] = target_dir
         proc = subprocess.Popen(
-            ['bash', '-c', full_command],
+            ['bash', '-i', '-c', full_command],
             preexec_fn=preexec,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -552,6 +552,34 @@
   display: none;
 }
 
+/* ── Task reference bar (link mode) ───────────────────────── */
+
+.nb-task-ref {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: rgba(0,113,227,.05);
+  border: 1px solid rgba(0,113,227,.15);
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.nb-task-ref-label {
+  font-size: 11px;
+  color: var(--sub);
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.nb-log-placeholder {
+  color: var(--sub);
+  font-style: italic;
+}
+
 .nb-task-fields .nb-textarea {
   min-height: 36px;
   font-size: 12px;
