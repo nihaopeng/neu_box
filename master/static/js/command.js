@@ -21,24 +21,38 @@ function renderQueue(data) {
       <div class="queue-item ${isRunning ? 'running' : ''} ${clickable ? 'clickable' : ''}"
            data-task-id="${task.task_id}"
            data-user-id="${escapeHtml(task.user_id)}"
+           data-command="${escapeHtml(task.command)}"
+           data-cpu="${task.cpu || 0}"
+           data-mem="${task.mem || '0'}"
+           data-device-num="${task.device_num || 0}"
            title="${isDone ? '点击查看日志' : (isRunning ? '点击查看实时日志' : '')}">
         <input type="checkbox" class="queue-check" data-task-id="${task.task_id}" title="选择">
         <span class="queue-pos">${posText}</span>
         <span class="queue-user" title="${escapeHtml(task.user_id)}">${escapeHtml(task.user_id)}</span>
         <span class="queue-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</span>
         <span class="queue-status ${task.status}">${statusLabel(task.status)}</span>
+        ${isDone ? `<button class="queue-rerun-btn" title="重新执行此命令" data-task-id="${task.task_id}">↻</button>` : ''}
       </div>`;
   }).join('');
 
-  // Bind click: only completed/failed → view log (ignore clicks on checkbox)
+  // Bind click: only completed/failed → view log (ignore clicks on checkbox & rerun btn)
   queueList.querySelectorAll('.queue-item.clickable').forEach(item => {
     item.addEventListener('click', (e) => {
       if (e.target.classList.contains('queue-check')) return;
-      // 选中高亮
+      if (e.target.classList.contains('queue-rerun-btn')) return;
       queueList.querySelectorAll('.queue-item.active').forEach(el => el.classList.remove('active'));
       item.classList.add('active');
       const taskId = item.dataset.taskId;
       if (taskId) viewTaskLog(taskId);
+    });
+  });
+
+  // Bind re-run buttons
+  queueList.querySelectorAll('.queue-rerun-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = btn.closest('.queue-item');
+      rerunTask(item.dataset);
     });
   });
 
@@ -53,6 +67,48 @@ function renderQueue(data) {
   const selectAllCb = document.getElementById('queueSelectAll');
   if (selectAllCb) selectAllCb.checked = false;
   queueBatchBar.style.display = 'none';
+}
+
+async function rerunTask(dataset) {
+  const cmd = dataset.command;
+  if (!cmd) return;
+  if (!confirm(`确定重新执行此命令？\n\n${cmd}`)) return;
+
+  // 解析 mem 字符串: "4G" → 4 GB, "512M" → 512 MB
+  const memRaw = dataset.mem || '0';
+  let memory = 0, memUnit = 'GB';
+  const m = memRaw.match(/^(\d+)([MG]?)$/i);
+  if (m) {
+    memory = parseInt(m[1], 10);
+    if (m[2].toUpperCase() === 'M') memUnit = 'MB';
+  }
+
+  const body = {
+    node_id:    state.selectedNodeId,
+    user_id:    dataset.userId,
+    command:    cmd,
+    cpu:        parseInt(dataset.cpu, 10) || 0,
+    memory,
+    mem_unit:   memUnit,
+    device_num: parseInt(dataset.deviceNum, 10) || 0,
+  };
+
+  try {
+    const resp = await fetch('/command/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      showToast(`已重新提交，队列位置 #${data.position}`, 'success');
+      fetchQueue();
+    } else {
+      showToast(data.error || '重新提交失败', 'error');
+    }
+  } catch (err) {
+    showToast('网络错误: ' + err.message, 'error');
+  }
 }
 
 function getCheckedTaskIds() {

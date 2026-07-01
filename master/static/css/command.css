@@ -138,6 +138,32 @@
 .queue-status.completed { color: #30d158; background: rgba(48,209,88,.1); }
 .queue-status.failed   { color: var(--danger); background: rgba(255,59,48,.1); }
 
+/* ── Queue re-run button ──────────────────────────────────── */
+
+.queue-rerun-btn {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card-bg);
+  color: var(--sub);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, color .15s;
+  margin-left: 2px;
+}
+
+.queue-rerun-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 
 /* ── Log progress bar ──────────────────────────────────────── */
 
