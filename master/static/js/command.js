@@ -3,6 +3,9 @@
 // Queue
 // ═══════════════════════════════════════════════════════════════
 
+// 缓存命令全文（避免 data-* 属性对长命令的截断）
+const _taskMeta = {};
+
 function renderQueue(data) {
   const queue = data.queue || [];
   if (queue.length === 0) {
@@ -15,16 +18,22 @@ function renderQueue(data) {
     const isRunning = task.status === 'running';
     const posText = isRunning ? '▶' : (task.position || '?');
     const isDone = task.status === 'completed' || task.status === 'failed';
-    const clickable = isDone || isRunning;  // 运行中任务也可点击，查看增量日志
+    const clickable = isDone || isRunning;
+
+    // 缓存命令全文（避免 DOM 属性截断）
+    if (isDone) {
+      _taskMeta[task.task_id] = {
+        command: task.command,
+        user_id: task.user_id,
+        cpu: task.cpu || 0,
+        mem: task.mem || '0',
+        device_num: task.device_num || 0,
+      };
+    }
 
     return `
       <div class="queue-item ${isRunning ? 'running' : ''} ${clickable ? 'clickable' : ''}"
            data-task-id="${task.task_id}"
-           data-user-id="${escapeHtml(task.user_id)}"
-           data-command="${escapeHtml(task.command)}"
-           data-cpu="${task.cpu || 0}"
-           data-mem="${task.mem || '0'}"
-           data-device-num="${task.device_num || 0}"
            title="${isDone ? '点击查看日志' : (isRunning ? '点击查看实时日志' : '')}">
         <input type="checkbox" class="queue-check" data-task-id="${task.task_id}" title="选择">
         <span class="queue-pos">${posText}</span>
@@ -51,8 +60,8 @@ function renderQueue(data) {
   queueList.querySelectorAll('.queue-rerun-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const item = btn.closest('.queue-item');
-      rerunTask(item.dataset);
+      const taskId = btn.dataset.taskId;
+      rerunTask(taskId);
     });
   });
 
@@ -69,13 +78,15 @@ function renderQueue(data) {
   queueBatchBar.style.display = 'none';
 }
 
-async function rerunTask(dataset) {
-  const cmd = dataset.command;
+async function rerunTask(taskId) {
+  const meta = _taskMeta[taskId];
+  if (!meta) return;
+  const cmd = meta.command;
   if (!cmd) return;
   if (!confirm(`确定重新执行此命令？\n\n${cmd}`)) return;
 
   // 解析 mem 字符串: "4G" → 4 GB, "512M" → 512 MB
-  const memRaw = dataset.mem || '0';
+  const memRaw = meta.mem || '0';
   let memory = 0, memUnit = 'GB';
   const m = memRaw.match(/^(\d+)([MG]?)$/i);
   if (m) {
@@ -85,12 +96,12 @@ async function rerunTask(dataset) {
 
   const body = {
     node_id:    state.selectedNodeId,
-    user_id:    dataset.userId,
+    user_id:    meta.user_id,
     command:    cmd,
-    cpu:        parseInt(dataset.cpu, 10) || 0,
+    cpu:        parseInt(meta.cpu, 10) || 0,
     memory,
     mem_unit:   memUnit,
-    device_num: parseInt(dataset.deviceNum, 10) || 0,
+    device_num: parseInt(meta.device_num, 10) || 0,
   };
 
   try {

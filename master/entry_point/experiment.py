@@ -19,6 +19,10 @@ experiment_bp = Blueprint('experiment', __name__)
 db = Database.get_instance()
 logger = logging.getLogger('master.experiment')
 
+# 实验日志缓存目录
+EXP_LOG_DIR = os.getenv('EXP_LOG_DIR', os.path.join(os.path.dirname(__file__), '..', 'logs', 'exp'))
+os.makedirs(EXP_LOG_DIR, exist_ok=True)
+
 # 图片上传大小限制 (默认 10MB)
 UPLOAD_MAX_SIZE = int(os.getenv('upload_max_size', str(10 * 1024 * 1024)))
 # 允许的图片 MIME 类型
@@ -47,6 +51,7 @@ def create_experiment():
         created_by=(data.get('created_by') or '').strip(),
         folder_id=data.get('folder_id') or None,
     )
+    _save_logs(data.get('logs') or {})
     return {'id': exp_id, 'message': '实验记录已创建'}, 201
 
 
@@ -86,6 +91,7 @@ def update_experiment(exp_id: str):
         tags=data.get('tags'),
         folder_id=data.get('folder_id'),
     )
+    _save_logs(data.get('logs') or {})
     return {'message': '已保存'}, 200
 
 
@@ -237,3 +243,33 @@ def _cleanup_images(blocks: list):
                     logger.warning("清理孤儿图片: %s", rel_path)
             except OSError:
                 pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# 日志缓存
+# ═══════════════════════════════════════════════════════════════
+
+def _save_logs(logs: dict):
+    """将前端传来的日志副本保存到 EXP_LOG_DIR。logs: { task_id: "log text", ... }"""
+    for task_id, text in logs.items():
+        if not task_id or not text:
+            continue
+        try:
+            path = os.path.join(EXP_LOG_DIR, f'{task_id}.log')
+            with open(path, 'w') as f:
+                f.write(text)
+        except Exception as e:
+            logger.warning("保存实验日志失败 %s: %s", task_id, e)
+
+
+@experiment_bp.route('/log/<task_id>', methods=['GET'])
+def serve_exp_log(task_id: str):
+    """提供缓存的实验日志（副本，不受 worker 任务删除影响）。"""
+    path = os.path.join(EXP_LOG_DIR, f'{task_id}.log')
+    if not os.path.isfile(path):
+        return '(日志不存在或已被清理)', 404
+    try:
+        with open(path, 'r') as f:
+            return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
+    except Exception as e:
+        return f'(读取日志失败: {e})', 500

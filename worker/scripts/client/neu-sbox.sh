@@ -35,7 +35,7 @@ case "$cmd" in
         fi
 
         # 无命令 → 沙盒模式（加入当前 shell）
-        shell_pid=$$
+        shell_pid=$PPID
 
         echo "[neu-sbox] 申请沙盒: device=${device_num} cpu=${cpu} mem=${memory}G"
         echo "[neu-sbox] shell PID=${shell_pid} user=${USER}"

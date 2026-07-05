@@ -230,6 +230,25 @@ function _startInlineRename(item, folderId) {
   });
 }
 
+// ── 加载任务日志（优先 master 缓存，回退 worker） ──
+
+async function _loadTaskLog(taskId, nodeId) {
+  // 1. 先试 master 缓存
+  try {
+    const r = await fetch(`/experiments/log/${taskId}`);
+    if (r.ok) return await r.text();
+  } catch {}
+  // 2. 回退 worker
+  if (nodeId) {
+    try {
+      const r = await fetch(
+        `/command/result/${taskId}/log?node_id=${encodeURIComponent(nodeId)}&raw=1`);
+      if (r.ok) return await r.text();
+    } catch {}
+  }
+  return null;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Block rendering — edit mode
 // ═══════════════════════════════════════════════════════════════
@@ -376,10 +395,8 @@ function bindNotebookEvents() {
       btn.textContent = '加载中…';
       btn.disabled = true;
       try {
-        const r = await fetch(
-          `/command/result/${taskId}/log?node_id=${encodeURIComponent(nodeId)}&raw=1`);
-        if (r.ok) {
-          const text = await r.text();
+        const text = await _loadTaskLog(taskId, nodeId);
+        if (text != null) {
           logEl.value = _handleCR(text);
           logEl.readOnly = false;
           logEl.placeholder = '日志输出…';
@@ -809,12 +826,24 @@ async function viewExperiment(expId) {
     const tagsRaw = document.getElementById('nbTags').value.trim();
     const tags = tagsRaw ? tagsRaw.split(/[,，]/).map(t => t.trim()).filter(Boolean) : [];
     const blocks = collectNotebookBlocks();
+    // 收集需要缓存的日志：已有内容直接发，无内容则从 master 缓存或 worker 拉
+    const logs = {};
+    for (const b of blocks) {
+      if (b.type === 'task' && b.task_id && b.log) {
+        logs[b.task_id] = b.log;
+      } else if (b.type === 'task' && b.task_id) {
+        try {
+          const text = await _loadTaskLog(b.task_id, b.node_id);
+          if (text != null) logs[b.task_id] = text;
+        } catch {}
+      }
+    }
     try {
       const r = await fetch(`/experiments/${expId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title, blocks, tags,
+          title, blocks, tags, logs,
           folder_id: nbFolder?.value || null,
         }),
       });
@@ -919,15 +948,24 @@ async function saveExperiment() {
   const tagsRaw = expTags.value.trim();
   const tags = tagsRaw ? tagsRaw.split(/[,，]/).map(t => t.trim()).filter(Boolean) : [];
 
-  // 构建 blocks：只存引用（task_id + node_id），不存日志正文
+  // 构建 blocks：存引用（task_id + node_id）
   const blocks = [];
+  const logs = {};
   if (_currentTaskData && _currentTaskData.task_result) {
+    const tid = _currentTaskData.task_id;
+    const nid = _currentTaskData.node_id;
     blocks.push({
       type: 'task',
       command: _currentTaskData.command || '',
-      task_id: _currentTaskData.task_id,
-      node_id: _currentTaskData.node_id,
+      task_id: tid,
+      node_id: nid,
     });
+    // 从 worker 拉日志副本，存到 master 缓存
+    try {
+      const logResp = await fetch(
+        `/command/result/${tid}/log?node_id=${encodeURIComponent(nid)}&raw=1`);
+      if (logResp.ok) logs[tid] = await logResp.text();
+    } catch {}
   }
 
   try {
@@ -935,7 +973,7 @@ async function saveExperiment() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title, blocks, tags,
+        title, blocks, tags, logs,
         created_by: state.cmdUserId || '',
         folder_id: expFolder.value || null,
       }),
@@ -1019,11 +1057,8 @@ document.getElementById('logContent').addEventListener('click', async (e) => {
       const nodeId = logEl.dataset.nodeId || state.selectedNodeId;
       logEl.innerHTML = '<span style="color:var(--sub)">加载中…</span>';
       try {
-        const r = await fetch(
-          `/command/result/${taskId}/log?node_id=${encodeURIComponent(nodeId)}&raw=1`);
-        if (r.ok) {
-          const text = await r.text();
-          // 处理 \r 进度条 + innerHTML 保留 \n 换行，只转义 < > &
+        const text = await _loadTaskLog(taskId, nodeId);
+        if (text != null) {
           logEl.innerHTML = _handleCR(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         } else {
           logEl.textContent = '(加载失败)';
