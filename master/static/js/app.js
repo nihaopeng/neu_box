@@ -47,6 +47,7 @@ const queueList         = document.getElementById('queueList');
 const queueRefreshBtn   = document.getElementById('queueRefreshBtn');
 const queueBatchBar     = document.getElementById('queueBatchBar');
 const queueBatchDeleteBtn = document.getElementById('queueBatchDeleteBtn');
+const queueUserFilter    = document.getElementById('queueUserFilter');
 
 // Experiment (shared refs)
 const logActions        = document.getElementById('logActions');
@@ -147,8 +148,16 @@ function switchMode(mode) {
     submitBtn.textContent = '申请终端';
     rightPanel.classList.add('mode-terminal');
     rightPanel.classList.remove('mode-command');
+    // 终端模式中栏显示活跃终端 & 沙盒
+    document.querySelector('#queuePanel .section-label').textContent = '活跃终端 / 沙盒';
+    document.getElementById('queueSelectAll').style.display = 'none';
+    queueBatchBar.style.display = 'none';
+    fetchSandboxes();
   } else if (mode === 'command') {
+    document.querySelector('#queuePanel .section-label').textContent = '任务队列';
+    document.getElementById('queueSelectAll').style.display = '';
     terminalFields.style.display = 'none';
+    fetchQueue();
     commandFields.style.display = '';
     queuePanel.style.display = '';
     experimentPanel.style.display = 'none';
@@ -190,7 +199,7 @@ modeToggle.addEventListener('click', (e) => {
 });
 
 // Init mode classes
-rightPanel.classList.add('mode-terminal');
+rightPanel.classList.add('mode-command');
 
 // ═══════════════════════════════════════════════════════════════
 // Node rendering
@@ -278,8 +287,9 @@ function selectNode(nodeId, nodes) {
   state.selectedNodeId = nodeId;
   renderNodeCards(nodes);
   updateSubmitBtn();
-  // Refresh queue when switching nodes
-  fetchQueue();
+  // 根据当前模式刷新中栏
+  if (state.mode === 'terminal') fetchSandboxes();
+  else fetchQueue();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -317,9 +327,10 @@ async function fetchNodes() {
 
     renderNodeCards(nodes);
     updateSubmitBtn();
-    // 首次加载自动选中第一个节点时也刷新任务队列
+    // 根据当前模式刷新中栏
     if (state.selectedNodeId) {
-      fetchQueue();
+      if (state.mode === 'terminal') fetchSandboxes();
+      else fetchQueue();
     }
 
   } catch (err) {

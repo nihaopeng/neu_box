@@ -110,3 +110,14 @@ def query_node_status(node_id: str):
         return result, 200
     except ValueError as e:
         return {'error': str(e)}, 404
+
+
+@nodes_bp.route('/<node_id>/sandboxes', methods=['GET'])
+def list_node_sandboxes(node_id: str):
+    """获取节点上所有活跃沙盒（终端 + 命令任务）。代理到 worker 的 GET /sandbox/list"""
+    pool = Nodes_Pool.get_nodes_pool()
+    try:
+        resp = pool.forward_get_to_node(node_id, '/sandbox/list')
+        return resp.json(), resp.status_code
+    except ValueError as e:
+        return {'error': str(e)}, 404

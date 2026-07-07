@@ -94,3 +94,104 @@
 .panel-right.mode-terminal.active .terminal-placeholder { display: none; }
 .panel-right.mode-terminal.active .terminal-iframe       { display: block; }
 
+/* ── Sandbox list items (terminal mode queue panel) ────────── */
+
+.sandbox-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--bg);
+  font-size: 11px;
+  cursor: default;
+}
+
+.sandbox-item.sandbox-terminal {
+  border-color: rgba(0,113,227,.15);
+  background: rgba(0,113,227,.04);
+}
+
+.sandbox-item.sandbox-command {
+  border-color: rgba(48,209,88,.12);
+  background: rgba(48,209,88,.04);
+}
+
+.sandbox-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.sandbox-user {
+  font-weight: 500;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-label {
+  color: var(--sub);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.sandbox-terminal .sandbox-label {
+  background: rgba(0,113,227,.1);
+  color: var(--accent);
+}
+
+.sandbox-command .sandbox-label {
+  background: rgba(48,209,88,.1);
+  color: #30d158;
+}
+
+.sandbox-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sandbox-line1 {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sandbox-line2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--sub);
+}
+
+.sandbox-dev {
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(255,159,10,.1);
+  color: #ff9f0a;
+  white-space: nowrap;
+}
+
+.sandbox-res {
+  font-size: 10px;
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.sandbox-id {
+  color: var(--sub);
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+

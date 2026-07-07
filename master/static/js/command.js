@@ -8,13 +8,25 @@ const _taskMeta = {};
 
 function renderQueue(data) {
   const queue = data.queue || [];
+  const filterUser = (queueUserFilter.value || '').trim().toLowerCase();
+
   if (queue.length === 0) {
     queueList.innerHTML = '<div class="queue-empty">队列为空</div>';
     queueBatchBar.style.display = 'none';
     return;
   }
 
-  queueList.innerHTML = queue.map(task => {
+  const filtered = filterUser
+    ? queue.filter(t => (t.user_id || '').toLowerCase().includes(filterUser))
+    : queue;
+
+  if (filtered.length === 0) {
+    queueList.innerHTML = `<div class="queue-empty">没有匹配 "${escapeHtml(filterUser)}" 的任务</div>`;
+    queueBatchBar.style.display = 'none';
+    return;
+  }
+
+  queueList.innerHTML = filtered.map(task => {
     const isRunning = task.status === 'running';
     const posText = isRunning ? '▶' : (task.position || '?');
     const isDone = task.status === 'completed' || task.status === 'failed';
@@ -179,6 +191,9 @@ function statusLabel(s) {
   return map[s] || s;
 }
 
+// 缓存最近一次队列数据，用于本地筛选
+let _lastQueueData = null;
+
 async function fetchQueue() {
   if (!state.selectedNodeId) {
     queueList.innerHTML = '<div class="queue-empty">选择节点后刷新</div>';
@@ -190,6 +205,7 @@ async function fetchQueue() {
     const resp = await fetch(`/command/queue?node_id=${encodeURIComponent(state.selectedNodeId)}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
+    _lastQueueData = data;
     renderQueue(data);
   } catch (err) {
     queueList.innerHTML = `<div class="queue-empty">加载失败: ${err.message}</div>`;
@@ -197,13 +213,19 @@ async function fetchQueue() {
   }
 }
 
-// Manual refresh only
+// Manual refresh — 根据模式调不同接口
 queueRefreshBtn.addEventListener('click', () => {
   queueRefreshBtn.classList.add('spinning');
-  fetchQueue().finally(() => queueRefreshBtn.classList.remove('spinning'));
+  const fn = state.mode === 'terminal' ? fetchSandboxes : fetchQueue;
+  fn().finally(() => queueRefreshBtn.classList.remove('spinning'));
 });
 
 // Also refresh when switching nodes (handled in selectNode)
+
+// User filter — 本地筛选，不重新请求
+queueUserFilter.addEventListener('input', () => {
+  if (_lastQueueData) renderQueue(_lastQueueData);
+});
 
 // ═══════════════════════════════════════════════════════════════
 // Log viewer — 全量加载 + 进度条

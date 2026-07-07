@@ -16,6 +16,11 @@
   flex-shrink: 0;
 }
 
+.queue-filter-bar {
+  padding: 6px 14px 0;
+  flex-shrink: 0;
+}
+
 /* ── Batch bar ─────────────────────────────────────────────── */
 
 .queue-batch-bar {

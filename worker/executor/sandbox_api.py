@@ -12,10 +12,24 @@ import pwd
 
 from flask import Blueprint, request
 
+from executor.db import Database
 from executor.sbx_manager import SbxManager
 
 logger = logging.getLogger(__name__)
 sandbox_bp = Blueprint('sandbox', __name__)
+
+
+def _find_sandbox_for_pid(pid: int) -> str | None:
+    """通过 /proc/<pid>/cgroup 查找 PID 所在的沙盒名称。"""
+    try:
+        with open(f'/proc/{pid}/cgroup') as f:
+            for line in f:
+                # cgroup v2 格式: "0::/sandbox_term_pengyt_12345"
+                if 'sandbox_' in line:
+                    return line.strip().rsplit('/', 1)[-1]
+    except Exception:
+        pass
+    return None
 
 
 def _verify_pid_owner(pid: int, username: str) -> bool:
@@ -59,6 +73,13 @@ def acquire():
     # 校验 PID 归属
     if not _verify_pid_owner(pid, username):
         return {'error': f'PID {pid} 不属于用户 {username}，或进程不存在'}, 403
+
+    # 如果 PID 已在某个沙盒中，先释放旧的（覆盖资源而非双占）
+    sbx = SbxManager.get_instance()
+    old_name = _find_sandbox_for_pid(pid)
+    if old_name:
+        logger.warning("PID %s 已在沙盒 '%s' 中，先释放旧沙盒", pid, old_name)
+        sbx.destroy_sandbox(old_name)
 
     # 转换内存格式
     if mem_val == 0:
@@ -121,18 +142,29 @@ def release():
 
 @sandbox_bp.route('/list', methods=['GET'])
 def list_sandboxes():
-    """列出沙盒。
+    """列出沙盒及其资源信息。
 
     Query: ?username=pengyt  可选，过滤指定用户
+
+    响应: { sandboxes: [{ name, cpu, mem, devices, port, created_at, pids }] }
     """
     username = (request.args.get('username') or '').strip()
-    sbx = SbxManager.get_instance()
-    all_names = sbx.list_sandboxes()
+    db = Database.get_instance()
+    all_records = db.list_sandboxes()
 
-    if username:
-        prefix = f"term_{username}_"
-        filtered = [n for n in all_names if n.startswith(prefix)]
-    else:
-        filtered = all_names
+    sandboxes = []
+    for s in all_records:
+        name = s.get('name') or ''
+        if username and not name.startswith(f"term_{username}_"):
+            continue
+        sandboxes.append({
+            'name': name,
+            'cpu': s.get('cpu', 0),
+            'mem': s.get('mem', '0'),
+            'devices': s.get('devices', []),
+            'port': s.get('port'),
+            'created_at': s.get('created_at'),
+            'pids': s.get('pids', []),
+        })
 
-    return {'sandboxes': filtered}, 200
+    return {'sandboxes': sandboxes}, 200
