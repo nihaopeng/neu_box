@@ -71,8 +71,30 @@ case "$cmd" in
 
     list|ls)
         echo "[neu-sbox] ${USER} 的沙盒:"
-        curl -s "${WORKER_URL}/sandbox/list?username=${USER}" \
-            | python3 -m json.tool 2>/dev/null
+        python3 -c "
+import json, sys
+from urllib.request import urlopen
+
+resp = urlopen('${WORKER_URL}/sandbox/list?username=${USER}')
+data = json.loads(resp.read())
+sbs = data.get('sandboxes', [])
+
+if not sbs:
+    print('  (无)')
+else:
+    for s in sbs:
+        name = s.get('name', '')
+        cpu = s.get('cpu', 0) or 0
+        mem = s.get('mem', '0') or '0'
+        devices = s.get('devices', [])
+        dev_str = ','.join(str(d) for d in devices) if devices else '—'
+        res_parts = []
+        if cpu: res_parts.append(f'CPU={cpu}')
+        if mem and mem != '0': res_parts.append(f'mem={mem}')
+        res_str = ' '.join(res_parts) if res_parts else '资源不限'
+        print(f'  {name}')
+        print(f'    设备: {dev_str}  |  {res_str}')
+" 2>/dev/null || curl -s "${WORKER_URL}/sandbox/list?username=${USER}"
         ;;
 
     status|st)
@@ -173,7 +195,7 @@ print(line)
         echo "  acquire [设备数] [CPU] [内存]            创建沙盒并加入当前 shell"
         echo "  acquire [设备数] [CPU] [内存] <命令>     提交命令任务"
         echo "  release <sandbox_name>                   释放沙盒"
-        echo "  list                                     列出我的沙盒"
+        echo "  list                                     列出我的沙盒（含资源详情）"
         echo "  status                                   查看当前 shell 沙盒状态"
         echo "  tasks                                    查看任务队列"
         echo "  result <task_id>                         查看任务结果和日志"
@@ -181,11 +203,13 @@ print(line)
         echo "示例:"
         echo "  neu-sbox acquire 1                       # 申请 1 个 NPU 沙盒"
         echo "  neu-sbox acquire 2 4 8                   # 申请 2 NPU + 4 核 + 8G 沙盒"
-        echo "  neu-sbox acquire 1 2 4 nvidia-smi        # 提交任务: 1 NPU 2核 4G 执行 nvidia-smi"
+        echo "  neu-sbox acquire 1 2 4 nvidia-smi        # 提交: 1 NPU 2核 4G 跑 nvidia-smi"
+        echo "  neu-sbox list                            # 列出沙盒（显示设备/资源）"
         echo "  neu-sbox tasks                           # 查看队列"
-        echo "  neu-sbox result abc123                   # 查看任务 abc123 结果"
+        echo "  neu-sbox result abc123                   # 查看任务 abc123 结果和日志"
         echo "  neu-sbox release user_pengyt_12345"
         echo ""
+        echo "已在沙盒中再次 acquire → 自动释放旧沙盒，覆盖为新资源"
         echo "远程 Worker: export NEU_BOX_URL=http://<worker_ip>:59075"
         ;;
 esac

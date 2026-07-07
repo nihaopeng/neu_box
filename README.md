@@ -114,19 +114,25 @@ GET /command/result/<id>/log?raw=1  → 纯文本日志 + Content-Length 头
 
 ### 终端沙盒模式 (`neu-sbox`)
 
-将当前 shell 加入独占设备的 cgroup 沙盒。Worker 通过 `/proc/<pid>/status` 校验 PID 归属，无需密码。
+将当前 shell 加入独占设备的 cgroup 沙盒，或提交一次性命令任务。Worker 通过 `/proc/<pid>/status` 校验 PID 归属，无需密码。
 
 ```bash
 # 安装 — Worker 用 sudo 启动时自动安装到 /etc/profile.d/
 source /etc/profile.d/neu-sbox.sh
 
-# 使用
-neu-sbox acquire 1              # 申请 1 个 NPU
+# ── 沙盒（终端隔离） ──
+neu-sbox acquire 1              # 申请 1 个 NPU，加入当前 shell
 neu-sbox acquire 2 4 8          # 申请 2 NPU + 4 核 CPU + 8G 内存
 neu-sbox status                 # 查看当前 shell 是否在沙盒中
-neu-sbox list                   # 列出我的沙盒
-neu-sbox release <name>         # 释放沙盒
+neu-sbox list                   # 列出我的沙盒（显示设备卡号、CPU、内存）
+neu-sbox release <name>         # 释放指定沙盒
 # 已在沙盒中再次 acquire → 自动释放旧沙盒，覆盖为新资源
+
+# ── 命令任务（一次性执行，类似前端命令模式） ──
+neu-sbox acquire 1 2 4 "nvidia-smi"       # 1 NPU + 2 核 + 4G 执行 nvidia-smi
+neu-sbox acquire 0 4 8 "python train.py"  # 0 NPU + 4 核 + 8G 跑训练
+neu-sbox tasks                              # 查看任务队列
+neu-sbox result <task_id>                   # 查看任务结果和日志
 ```
 
 ```bash
@@ -139,10 +145,12 @@ neu-sbox acquire 1
 POST /sandbox/acquire {username, pid, device_num, cpu, memory}
   → /proc/<pid>/cgroup 检测是否已在沙盒中 → 是: 先释放旧沙盒
   → /proc/<pid>/status 校验归属 → cgroup 创建 + 设备分配 → PID 加入
+POST /sandbox/acquire {..., command: "nvidia-smi"}   # 带命令 → 走任务队列
+  → 类似 POST /command/run，提交后返回 task_id
 POST /sandbox/release {sandbox_name}
   → destroy_sandbox() → cgroup.freeze → cgroup.kill → 设备归还
 GET  /sandbox/list
-  → 返回所有活跃沙盒（名称、CPU、内存、设备、PID）
+  → 返回活跃沙盒详情（名称、CPU、内存、设备列表、PID）
 ```
 
 ### 沙盒销毁流程

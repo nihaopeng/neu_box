@@ -152,10 +152,12 @@ function switchMode(mode) {
     document.querySelector('#queuePanel .section-label').textContent = '活跃终端 / 沙盒';
     document.getElementById('queueSelectAll').style.display = 'none';
     queueBatchBar.style.display = 'none';
+    if (queueUserFilter) queueUserFilter.parentElement.style.display = 'none';
     fetchSandboxes();
   } else if (mode === 'command') {
     document.querySelector('#queuePanel .section-label').textContent = '任务队列';
     document.getElementById('queueSelectAll').style.display = '';
+    if (queueUserFilter) queueUserFilter.parentElement.style.display = '';
     terminalFields.style.display = 'none';
     fetchQueue();
     commandFields.style.display = '';
