@@ -4,8 +4,8 @@
 const state = {
   mode:       null,            // set by switchMode on init
   selectedNodeId: null,
-  cpu:        0,
-  memory:     0,
+  cpu:        20,
+  memory:     20,
   memUnit:    'GB',
   device_num: 1,
   cmdUserId:  localStorage.getItem('neu_box_cmd_user') || '',

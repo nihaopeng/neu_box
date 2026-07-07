@@ -222,9 +222,9 @@ queueRefreshBtn.addEventListener('click', () => {
 
 // Also refresh when switching nodes (handled in selectNode)
 
-// User filter — 本地筛选，不重新请求
+// User filter — 本地筛选（仅命令模式）
 queueUserFilter.addEventListener('input', () => {
-  if (_lastQueueData) renderQueue(_lastQueueData);
+  if (state.mode === 'command' && _lastQueueData) renderQueue(_lastQueueData);
 });
 
 // ═══════════════════════════════════════════════════════════════
