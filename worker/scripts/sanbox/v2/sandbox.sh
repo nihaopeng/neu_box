@@ -31,6 +31,13 @@ PREFIX="sandbox_"
 
 die() { echo "错误: $*" >&2; exit 1; }
 
+# 检查是否具备 root 等效权限（能操作 cgroup）
+_require_root() {
+    if [ "$(id -u)" -ne 0 ] && [ ! -w "${CGROUP_ROOT}/cgroup.procs" ]; then
+        die "需要 root 权限，请使用: sudo $0 $*"
+    fi
+}
+
 # ==================================================================
 # cgroup v2 路径函数
 # ==================================================================
@@ -63,7 +70,7 @@ _cg_kickall() {
 }
 _cg_kill_all() {
     # 可靠地杀死 cgroup 内所有进程，确保 destroy 时不残留。
-    # 流程: freeze → cgroup.kill → 等待清空 → fallback 迁回根 cgroup
+    # 流程: freeze → cgroup.kill → 等待清空 → kill -9 兜底 → 迁回根 cgroup
     local name="$1" cg procs waited
     cg=$(_cg "$name")
     [ -d "$cg" ] || return 0
@@ -85,7 +92,7 @@ _cg_kill_all() {
     if [ -f "$cg/cgroup.kill" ]; then
         echo 1 > "$cg/cgroup.kill" 2>/dev/null || true
         waited=0
-        while [ $waited -lt 30 ]; do
+        while [ $waited -lt 50 ]; do
             procs=$(cat "$cg/cgroup.procs" 2>/dev/null || true)
             [ -z "$procs" ] && break
             sleep 0.1
@@ -93,11 +100,27 @@ _cg_kill_all() {
         done
     fi
 
-    # 3. Fallback: 如果有残留，迁回根 cgroup 以免 rmdir 失败
+    # 3. 兜底: kill -9 残留进程（cgroup.kill 可能因内核版本问题未生效）
+    procs=$(cat "$cg/cgroup.procs" 2>/dev/null || true)
+    for p in $procs; do
+        kill -9 "$p" 2>/dev/null || true
+    done
+    # 再等一等让进程被 reaped
+    waited=0
+    while [ $waited -lt 20 ]; do
+        procs=$(cat "$cg/cgroup.procs" 2>/dev/null || true)
+        [ -z "$procs" ] && break
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+
+    # 4. Fallback: 如果有残留，迁回根 cgroup 以免 rmdir 失败
     procs=$(cat "$cg/cgroup.procs" 2>/dev/null || true)
     for p in $procs; do
         echo "$p" > "$(_cg_root_procs)" 2>/dev/null || true
     done
+    # 再次检查，顽固僵尸进程忽略（内核会自动清理）
+    sleep 0.3
 }
 _cg_set_cpu() {
     local name="$1" cores="$2"
@@ -250,6 +273,7 @@ cmd_load() {
 }
 
 cmd_create() {
+    _require_root "create <name> <cpu> <mem> [devices...]"
     local name="$1"; [ -n "$name" ] || die "用法: $0 create <name> <cpu> <mem> [major:minor ...]"
     local cpu="$2";  [ -n "$cpu"  ] || die "用法: $0 create <name> <cpu> <mem> [major:minor ...]"
     local mem="$3";  [ -n "$mem"  ] || die "用法: $0 create <name> <cpu> <mem> [major:minor ...]"
@@ -322,6 +346,7 @@ cmd_create() {
 }
 
 cmd_join() {
+    _require_root "join <name> <PID>"
     local name="$1" pid="$2"
     [ -n "$name" ] || die "用法: $0 join <name> <PID>"
     [ -n "$pid"  ] || die "用法: $0 join <name> <PID>"
@@ -376,6 +401,7 @@ cmd_status() {
 }
 
 cmd_destroy() {
+    _require_root "destroy <name>"
     local name="$1"; [ -n "$name" ] || die "用法: $0 destroy <name>"
     [ -d "$(_cg "$name")" ] || die "沙盒 '${name}' 不存在"
 
@@ -433,25 +459,69 @@ cmd_list() {
 }
 
 cmd_cleanup() {
+    _require_root "cleanup"
     echo "=== 完全清理 ==="
+    local failed=0 total=0
+
     for d in "${CGROUP_ROOT}"/${PREFIX}*/; do
         [ -d "$d" ] || continue
+        total=$((total + 1))
         local name="${d##*/${PREFIX}}"
         name="${name%/}"
-        echo "销毁沙盒: $name"
-        # 直接清理 cgroup 和 map 条目，不走 cmd_destroy 避免重复 detach
+        echo -n "销毁沙盒: $name ... "
+
+        # 1. 杀死 cgroup 内所有进程
         _cg_kickall "$name" 2>/dev/null || true
-        _cg_rmdir "$name" 2>/dev/null || true
+
+        # 2. 递归删除子 cgroup（最深优先），以防沙盒内进程创建了子 cgroup
+        find "$d" -mindepth 1 -type d 2>/dev/null | sort -r | while read child; do
+            # 先把子 cgroup 里的进程迁走/杀掉
+            if [ -f "$child/cgroup.kill" ]; then
+                echo 1 > "$child/cgroup.kill" 2>/dev/null || true
+                sleep 0.3
+            fi
+            rmdir "$child" 2>/dev/null || true
+        done
+
+        # 3. 再次确保主 cgroup 无进程
+        local procs
+        procs=$(cat "$d/cgroup.procs" 2>/dev/null || true)
+        for p in $procs; do
+            echo "$p" > "$(_cg_root_procs)" 2>/dev/null || true
+        done
+        sleep 0.2
+
+        # 4. 删除主 cgroup 目录
+        if rmdir "$d" 2>/dev/null; then
+            echo "✓"
+            # 清理设备文件
+            rm -f "/tmp/neu_box_devices_${name}" 2>/dev/null || true
+        else
+            echo "✗ 失败（目录非空或无权限）"
+            failed=$((failed + 1))
+        fi
     done
 
-    # 分离 BPF 程序
+    # 分离并卸载 BPF 程序
     _bpf_detach
-
-    # 卸载 BPF 程序及 maps
     _bpf_unload
 
     rm -f /tmp/neu_box_devices_* 2>/dev/null || true
-    echo "✓ 清理完成"
+
+    # ===== 验证清理结果 =====
+    local remaining=0
+    for d in "${CGROUP_ROOT}"/${PREFIX}*/; do
+        [ -d "$d" ] || continue
+        remaining=$((remaining + 1))
+        echo "⚠ 残留: ${d}"
+    done
+
+    if [ $remaining -eq 0 ]; then
+        echo "✓ 清理完成（${total} 个沙盒已销毁）"
+    else
+        echo "⚠ 清理结束：${remaining}/${total} 个沙盒未能删除"
+        echo "  请检查是否缺少 root 权限，或手动执行: sudo $0 cleanup"
+    fi
 }
 
 # ==================================================================
