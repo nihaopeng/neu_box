@@ -418,10 +418,23 @@ class SbxManager:
                     os.kill(pid, 0)
                     all_dead = False
                     break
-                except OSError:
+                except (OSError, TypeError):
+                    # TypeError: pids 字段异常（非整数），当作已死
                     pass
 
             if all_dead:
+                # 二次确认：读 cgroup.procs，真正的权威来源
+                procs_file = os.path.join(self._cg_path(name), 'cgroup.procs')
+                cgroup_empty = False
+                try:
+                    with open(procs_file) as f:
+                        cgroup_empty = not f.read().strip()
+                except (OSError, IOError):
+                    cgroup_empty = True  # 目录消失 = 空
+                if not cgroup_empty:
+                    logger.debug("沙盒 '%s' DB pid 已死但 cgroup.procs 非空，跳过", name)
+                    continue
+
                 logger.warning("清理孤儿沙盒 '%s' (所有 PID 已退出)", name)
                 port = record.get('port')
                 if port:
