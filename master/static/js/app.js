@@ -12,8 +12,8 @@ const state = {
 };
 
 const limits = {
-  cpu:        { min: 0, max: 64   },
-  memory:     { min: 0, max: 256  },
+  cpu:        { min: 0, max: Infinity   },
+  memory:     { min: 0, max: Infinity  },
   device_num: { min: 0, max: 16   },
 };
 

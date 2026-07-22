@@ -118,6 +118,11 @@
   background: rgba(48,209,88,.04);
 }
 
+.sandbox-item.sandbox-acquire {
+  border-color: rgba(255,149,0,.12);
+  background: rgba(255,149,0,.04);
+}
+
 .sandbox-icon {
   font-size: 14px;
   flex-shrink: 0;

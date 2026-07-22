@@ -20,13 +20,16 @@ async function fetchSandboxes() {
 }
 
 function parseSandboxName(name) {
-  // term_pengyt_12345 → { type: 'terminal', user: 'pengyt', pid: '12345' }
-  // cmd_abc123def → { type: 'command', id: 'abc123def' }
+  // term_<pid>           → TTYD Web 终端 (type: 'terminal')
+  // term_<user>_<pid>    → 手动 acquire，用户自己的进程 (type: 'acquire')
+  // cmd_<task_id>        → 命令任务 (type: 'command')
   if (name.startsWith('term_')) {
     const parts = name.slice(5).split('_');
     const pid = parts.pop();
     const user = parts.join('_');
-    return { type: 'terminal', user: user || '?', pid };
+    // 只有一个数字 PID → TTYD 终端；有用户名 → 手动 acquire
+    const type = user ? 'acquire' : 'terminal';
+    return { type, user: user || '?', pid };
   }
   if (name.startsWith('cmd_')) {
     return { type: 'command', id: name.slice(4) };
@@ -60,8 +63,24 @@ function renderSandboxes(sandboxes) {
           <span class="sandbox-icon">⌨</span>
           <div class="sandbox-info">
             <div class="sandbox-line1">
-              <span class="sandbox-user">${escapeHtml(info.user)}</span>
               <span class="sandbox-label">终端</span>
+              ${info.user !== '?' ? `<span class="sandbox-user">${escapeHtml(info.user)}</span>` : ''}
+            </div>
+            <div class="sandbox-line2">
+              ${devices ? `<span class="sandbox-dev">卡 ${devices}</span>` : ''}
+              ${resStr ? `<span class="sandbox-res">${resStr}</span>` : ''}
+            </div>
+          </div>
+        </div>`;
+    }
+    if (info.type === 'acquire') {
+      return `
+        <div class="sandbox-item sandbox-acquire">
+          <span class="sandbox-icon">🔗</span>
+          <div class="sandbox-info">
+            <div class="sandbox-line1">
+              <span class="sandbox-user">${escapeHtml(info.user)}</span>
+              <span class="sandbox-label">手动挂载</span>
             </div>
             <div class="sandbox-line2">
               ${devices ? `<span class="sandbox-dev">卡 ${devices}</span>` : ''}

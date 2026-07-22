@@ -96,8 +96,8 @@
           <input type="text" class="text-input" id="cmdUserId" placeholder="输入你的用户名" autocomplete="off">
         </div>
         <div class="field">
-          <label>命令</label>
-          <input type="text" class="text-input" id="cmdInput" placeholder="例如: nvidia-smi / echo hello" autocomplete="off">
+          <label>命令 <span class="unit">每行一条，自动 && 拼接</span></label>
+          <textarea class="text-input cmd-textarea" id="cmdInput" placeholder="nvidia-smi&#10;echo hello" autocomplete="off" rows="4"></textarea>
         </div>
       </div>
 
@@ -215,6 +215,40 @@
         <div class="modal-node-list" id="configNodeList">
           <div style="color:var(--sub);font-size:13px;text-align:center;padding:12px">加载中…</div>
         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 重新执行命令弹窗 ═══ -->
+<div class="modal-overlay" id="rerunModal" style="display:none">
+  <div class="modal-card" style="max-width:560px">
+    <div class="modal-header">
+      <span>重新执行命令</span>
+      <button class="modal-close" id="rerunModalClose" title="关闭">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>命令</label>
+        <textarea class="text-input" id="rerunCmdInput" rows="20" style="font-family:monospace;font-size:12px;resize:vertical"></textarea>
+      </div>
+      <div style="display:flex;gap:8px">
+        <div class="field" style="flex:1">
+          <label>CPU <span class="unit">核数</span></label>
+          <input type="number" class="text-input" id="rerunCpu" min="0" value="0" style="text-align:center">
+        </div>
+        <div class="field" style="flex:1">
+          <label>内存 <span class="unit">GB</span></label>
+          <input type="number" class="text-input" id="rerunMem" min="0" value="0" style="text-align:center">
+        </div>
+        <div class="field" style="flex:1">
+          <label>设备数</label>
+          <input type="number" class="text-input" id="rerunDevNum" min="0" value="1" style="text-align:center">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="submit-btn" id="rerunConfirmBtn" style="flex:1;margin-top:0">确认执行</button>
+        <button class="submit-btn cancel" id="rerunCancelBtn" style="flex:1;margin-top:0;background:var(--card-bg);color:var(--text);border:1px solid var(--border)">取消</button>
       </div>
     </div>
   </div>

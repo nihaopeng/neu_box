@@ -90,30 +90,80 @@ function renderQueue(data) {
   queueBatchBar.style.display = 'none';
 }
 
+// ── 重新执行命令弹窗 ──────────────────────────────────────
+const rerunModal      = document.getElementById('rerunModal');
+const rerunCmdInput   = document.getElementById('rerunCmdInput');
+const rerunCpu        = document.getElementById('rerunCpu');
+const rerunMem        = document.getElementById('rerunMem');
+const rerunDevNum     = document.getElementById('rerunDevNum');
+const rerunConfirmBtn = document.getElementById('rerunConfirmBtn');
+const rerunCancelBtn  = document.getElementById('rerunCancelBtn');
+const rerunModalClose = document.getElementById('rerunModalClose');
+
+function openRerunModal(cmd, cpu, mem, devNum) {
+  return new Promise((resolve) => {
+    rerunCmdInput.value = cmd;
+    rerunCpu.value = cpu;
+    rerunMem.value = mem;
+    rerunDevNum.value = devNum;
+    rerunModal.style.display = '';
+
+    const cleanup = () => {
+      rerunModal.style.display = 'none';
+      rerunConfirmBtn.onclick = null;
+      rerunCancelBtn.onclick = null;
+      rerunModalClose.onclick = null;
+      rerunModal.onclick = null;
+    };
+
+    rerunConfirmBtn.onclick = () => {
+      const val = rerunCmdInput.value.trim();
+      if (!val) { cleanup(); resolve(null); return; }
+      cleanup();
+      resolve({
+        command: val,
+        cpu: parseInt(rerunCpu.value, 10) || 0,
+        memory: parseInt(rerunMem.value, 10) || 0,
+        device_num: parseInt(rerunDevNum.value, 10) || 0,
+      });
+    };
+    rerunCancelBtn.onclick = () => { cleanup(); resolve(null); };
+    rerunModalClose.onclick = () => { cleanup(); resolve(null); };
+    rerunModal.onclick = (e) => {
+      if (e.target === rerunModal) { cleanup(); resolve(null); }
+    };
+    rerunCmdInput.focus();
+  });
+}
+
 async function rerunTask(taskId) {
   const meta = _taskMeta[taskId];
   if (!meta) return;
   const cmd = meta.command;
   if (!cmd) return;
-  if (!confirm(`确定重新执行此命令？\n\n${cmd}`)) return;
 
-  // 解析 mem 字符串: "4G" → 4 GB, "512M" → 512 MB
+  // 解析 mem: "4G" → 4, "512M" → 512
   const memRaw = meta.mem || '0';
-  let memory = 0, memUnit = 'GB';
+  let memNum = 0;
   const m = memRaw.match(/^(\d+)([MG]?)$/i);
   if (m) {
-    memory = parseInt(m[1], 10);
-    if (m[2].toUpperCase() === 'M') memUnit = 'MB';
+    memNum = parseInt(m[1], 10);
+    if (m[2].toUpperCase() === 'M') memNum = Math.round(memNum / 1024);  // 转为 GB
   }
+
+  const result = await openRerunModal(
+    cmd, parseInt(meta.cpu, 10) || 0, memNum,
+    parseInt(meta.device_num, 10) || 0);
+  if (!result) return;
 
   const body = {
     node_id:    state.selectedNodeId,
     user_id:    meta.user_id,
-    command:    cmd,
-    cpu:        parseInt(meta.cpu, 10) || 0,
-    memory,
-    mem_unit:   memUnit,
-    device_num: parseInt(meta.device_num, 10) || 0,
+    command:    result.command,
+    cpu:        result.cpu,
+    memory:     result.memory,
+    mem_unit:   'GB',
+    device_num: result.device_num,
   };
 
   try {
@@ -376,7 +426,9 @@ async function viewTaskLog(taskId) {
 
 async function submitCommand() {
   const userId = cmdUserIdEl.value.trim();
-  const command = cmdInputEl.value.trim();
+  // 按行拆分，过滤空行，&& 拼接
+  const command = cmdInputEl.value.trim()
+    .split('\n').map(s => s.trim()).filter(Boolean).join(' && ');
   if (!userId)   { showToast('请输入用户标识', 'error'); return; }
   if (!command)  { showToast('请输入命令', 'error'); return; }
 
