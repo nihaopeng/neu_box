@@ -41,6 +41,7 @@ def create():
         'memory': memory,
         'mem_unit': mem_unit,
         'device_num': device_num,
+        'device_ids': data.get('device_ids'),
         'username': username,
         'password': password,
     }

@@ -77,6 +77,12 @@
         </div>
       </div>
 
+      <!-- 设备选择（指定卡号，优先级高于数量） -->
+      <div class="field" id="devicePickerField" style="display:none">
+        <label>指定卡号 <span class="unit">勾选后忽略数量</span></label>
+        <div class="device-picker" id="devicePicker"></div>
+      </div>
+
       <!-- ── 终端模式字段 ── -->
       <div id="terminalFields" style="display:none">
         <div class="field">
@@ -216,6 +222,19 @@
           <div style="color:var(--sub);font-size:13px;text-align:center;padding:12px">加载中…</div>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 通知弹窗 ═══ -->
+<div class="modal-overlay" id="noticeModal" style="display:none">
+  <div class="modal-card" style="max-width:480px">
+    <div class="modal-header">
+      <span>📢 通知</span>
+      <button class="modal-close" id="noticeModalClose" title="关闭">×</button>
+    </div>
+    <div class="modal-body" id="noticeModalBody" style="white-space:pre-wrap;line-height:1.7;font-size:13px">
+      加载中…
     </div>
   </div>
 </div>

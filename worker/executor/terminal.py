@@ -41,6 +41,7 @@ def create():
     # 解析请求中的设备/资源需求
     body = request.get_json(silent=True) or {}
     device_num = body.get('device_num', 0)
+    device_ids = body.get('device_ids')  # 可选，用户指定卡号
     sandbox_cpu = body.get('cpu', 0)
     # 将 memory(int) + mem_unit 转为沙盒用的字符串格式（如 "2G", "512M", "0"=不限）
     mem_val = body.get('memory', 0)
@@ -100,13 +101,20 @@ def create():
             logger.error('ttyd 启动失败: %s', detail)
             return {'error': '终端启动失败', 'details': detail}, 500
 
-        # 5. 分配沙盒并加入 ttyd 进程
+        # 5. 归一化 device_ids → ["major:minor", ...]
         sbx = SbxManager.get_instance()
+        normalized_ids = None
+        if device_ids and isinstance(device_ids, list):
+            from executor.sandbox_api import _normalize_device_ids
+            normalized_ids = _normalize_device_ids(device_ids, sbx._discover_device_nodes())
+
+        # 6. 分配沙盒并加入 ttyd 进程
         result = sbx.allocate_for_terminal(
             str(process.pid),
             cpu=sandbox_cpu,
             mem=sandbox_mem,
-            device_num=device_num,
+            device_num=device_num if not normalized_ids else 0,
+            device_ids=normalized_ids,
             port=port,
         )
         if result is None:

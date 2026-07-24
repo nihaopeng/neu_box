@@ -426,9 +426,24 @@ async function viewTaskLog(taskId) {
 
 async function submitCommand() {
   const userId = cmdUserIdEl.value.trim();
-  // 按行拆分，过滤空行，&& 拼接
-  const command = cmdInputEl.value.trim()
-    .split('\n').map(s => s.trim()).filter(Boolean).join(' && ');
+  // 按行拆分，支持 \ 续行符，逻辑命令间 && 拼接
+  const lines = cmdInputEl.value.trim()
+    .split('\n').map(s => s.trim()).filter(s => s !== '');
+  const commands = [];
+  let buf = '';
+  for (const line of lines) {
+    if (line.endsWith('\\')) {
+      buf += (buf ? ' ' : '') + line.slice(0, -1).trim();
+    } else if (buf) {
+      buf += ' ' + line;
+      commands.push(buf);
+      buf = '';
+    } else {
+      commands.push(line);
+    }
+  }
+  if (buf) commands.push(buf);  // 最后一行以 \ 结尾的残余
+  const command = commands.join(' && ');
   if (!userId)   { showToast('请输入用户标识', 'error'); return; }
   if (!command)  { showToast('请输入命令', 'error'); return; }
 
@@ -443,7 +458,8 @@ async function submitCommand() {
     cpu:        state.cpu,
     memory:     state.memory,
     mem_unit:   state.memUnit,
-    device_num: state.device_num,
+    device_num: state.device_ids.length > 0 ? 0 : state.device_num,
+    device_ids: state.device_ids.length > 0 ? state.device_ids.map(String) : undefined,
   };
 
   try {

@@ -8,6 +8,7 @@ const state = {
   memory:     20,
   memUnit:    'GB',
   device_num: 1,
+  device_ids: [],   // 用户选中的卡号
   cmdUserId:  localStorage.getItem('neu_box_cmd_user') || '',
 };
 
@@ -48,6 +49,8 @@ const queueRefreshBtn   = document.getElementById('queueRefreshBtn');
 const queueBatchBar     = document.getElementById('queueBatchBar');
 const queueBatchDeleteBtn = document.getElementById('queueBatchDeleteBtn');
 const queueUserFilter    = document.getElementById('queueUserFilter');
+const devicePicker       = document.getElementById('devicePicker');
+const devicePickerField  = document.getElementById('devicePickerField');
 
 // Experiment (shared refs)
 const logActions        = document.getElementById('logActions');
@@ -159,8 +162,9 @@ function switchMode(mode) {
     document.getElementById('queueSelectAll').style.display = '';
     if (queueUserFilter) queueUserFilter.parentElement.style.display = '';
     terminalFields.style.display = 'none';
-    fetchQueue();
     commandFields.style.display = '';
+    // fetchQueue 在 command.js 中，此时可能尚未加载，延迟调用
+    if (typeof fetchQueue === 'function') fetchQueue();
     queuePanel.style.display = '';
     experimentPanel.style.display = 'none';
     submitBtn.style.display = '';
@@ -216,6 +220,37 @@ function renderDeviceChips(idle) {
   html += '</span>';
   html += `<span class="device-text">${idle} 可用</span>`;
   return html;
+}
+
+function renderDevicePicker(devStatus) {
+  // devStatus = {1: 0, 2: 1, 3: 0, ...}  key=minor, value=1忙碌/0空闲
+  if (!devStatus || Object.keys(devStatus).length === 0) {
+    devicePickerField.style.display = 'none';
+    state.device_ids = [];
+    return;
+  }
+  devicePickerField.style.display = '';
+  const current = new Set(state.device_ids);
+  const ids = Object.keys(devStatus).map(Number).sort((a, b) => a - b);
+  devicePicker.innerHTML = ids.map(id => {
+    const busy = devStatus[id];
+    const checked = current.has(id) ? 'checked' : '';
+    const disabled = busy ? 'disabled' : '';
+    const label = busy ? `卡${id} (占用)` : `卡${id}`;
+    return `<label class="device-check ${busy ? 'busy' : 'free'}">
+      <input type="checkbox" value="${id}" ${checked} ${disabled}> ${label}
+    </label>`;
+  }).join('');
+  // 监听变化
+  devicePicker.querySelectorAll('input:not([disabled])').forEach(cb => {
+    cb.addEventListener('change', () => {
+      state.device_ids = Array.from(
+        devicePicker.querySelectorAll('input:checked:not([disabled])')
+      ).map(cb => parseInt(cb.value));
+      // 选了卡就禁用数量 stepper
+      updateSubmitBtn();
+    });
+  });
 }
 
 function progressClass(percent) {
@@ -287,8 +322,12 @@ function renderNodeCards(nodes) {
 
 function selectNode(nodeId, nodes) {
   state.selectedNodeId = nodeId;
+  state.device_ids = [];  // 切节点清空已选卡
   renderNodeCards(nodes);
   updateSubmitBtn();
+  // 渲染设备选择框
+  const node = nodes.find(n => n.node_id === nodeId);
+  renderDevicePicker(node ? node.dev_status : {});
   // 根据当前模式刷新中栏
   if (state.mode === 'terminal') fetchSandboxes();
   else fetchQueue();
@@ -672,3 +711,19 @@ themeToggle.addEventListener('click', () => {
 // Init UI to default mode
 switchMode('command');
 
+// ── 通知弹窗（每次进入页面弹出） ──
+(async () => {
+  try {
+    const resp = await fetch('/static/notice.txt');
+    if (!resp.ok) return;
+    const text = await resp.text();
+    if (!text.trim()) return;
+    document.getElementById('noticeModalBody').textContent = text;
+    const modal = document.getElementById('noticeModal');
+    const close = document.getElementById('noticeModalClose');
+    modal.style.display = '';
+    const hide = () => { modal.style.display = 'none'; };
+    close.onclick = hide;
+    modal.onclick = (e) => { if (e.target === modal) hide(); };
+  } catch {}
+})();

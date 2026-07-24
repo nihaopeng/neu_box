@@ -535,6 +535,50 @@ body {
   line-height: 1.5;
 }
 
+/* ── Device picker checkboxes ──────────────────────────────── */
+
+.device-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.device-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text);
+  user-select: none;
+}
+
+.device-check.busy {
+  color: var(--sub);
+  cursor: not-allowed;
+  opacity: .4;
+  text-decoration: line-through;
+  pointer-events: none;
+}
+
+.device-check.free:hover {
+  border-color: var(--accent);
+}
+
+.device-check input[type="checkbox"] {
+  display: none;
+}
+
+.device-check:has(input:checked) {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 /* ── Submit ────────────────────────────────────────────────── */
 
 .submit-btn {

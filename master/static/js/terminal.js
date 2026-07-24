@@ -20,11 +20,13 @@ async function fetchSandboxes() {
 }
 
 function parseSandboxName(name) {
-  // term_<pid>           → TTYD Web 终端 (type: 'terminal')
-  // term_<user>_<pid>    → 手动 acquire，用户自己的进程 (type: 'acquire')
-  // cmd_<task_id>        → 命令任务 (type: 'command')
+  // term_<pid>.slice          → TTYD Web 终端 (type: 'terminal')
+  // term_<user>_<pid>.slice   → 手动 acquire (type: 'acquire')
+  // cmd_<task_id>             → 命令任务 (type: 'command')
   if (name.startsWith('term_')) {
-    const parts = name.slice(5).split('_');
+    // 去掉 .slice 后缀
+    const clean = name.endsWith('.slice') ? name.slice(0, -6) : name;
+    const parts = clean.slice(5).split('_');
     const pid = parts.pop();
     const user = parts.join('_');
     // 只有一个数字 PID → TTYD 终端；有用户名 → 手动 acquire
@@ -142,7 +144,8 @@ async function submitTerminal() {
     cpu:      state.cpu,
     memory:   state.memory,
     mem_unit: state.memUnit,
-    device_num: state.device_num,
+    device_num: state.device_ids.length > 0 ? 0 : state.device_num,
+    device_ids: state.device_ids.length > 0 ? state.device_ids.map(String) : undefined,
     username: username,
     password: password,
   };

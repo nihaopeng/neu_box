@@ -44,27 +44,44 @@ class Node_Manager:
     # ── 设备信息（由独立脚本采集） ─────────────────────────────
 
     def device_info(self) -> dict:
-        """调用 dev_info_script_path 脚本，返回 {"total": N, "idle": N}。
+        """返回设备状态，以 device_filter (.env) 为准绳。
 
-        脚本自行处理 GPU/NPU/其他设备的汇总逻辑，失败返回全 0。
+        dev_status = {minor: 1/0}，1=忙碌 0=空闲。
+        故障卡从 device_filter 排除后自动不可见。
         """
+        from executor.sbx_manager import SbxManager
+        sbx = SbxManager.get_instance()
+        all_devices = sbx._discover_device_nodes()
+        all_ids = sorted(set(
+            int(d.split(':')[1]) for d in all_devices
+        )) if all_devices else []
+        if not all_ids:
+            return {'total': 0, 'idle': 0, 'dev_status': {}}
+
+        # 脚本报告的外部进程 busy
+        busy = set()
         path = os.getenv('dev_info_script_path', '')
-        if not path:
-            return {'total': 0, 'idle': 0}
-        try:
-            out = subprocess.check_output(
-                [path],
-                timeout=10,
-                stderr=subprocess.DEVNULL,
-            )
-            data = json.loads(out.decode())
-            return {
-                'total': data.get('total', 0),
-                'idle': data.get('idle', 0),
-            }
-        except (FileNotFoundError, subprocess.CalledProcessError,
-                subprocess.TimeoutExpired, json.JSONDecodeError):
-            return {'total': 0, 'idle': 0}
+        if path:
+            try:
+                out = subprocess.check_output(
+                    [path], timeout=10, stderr=subprocess.DEVNULL)
+                data = json.loads(out.decode())
+                busy = set(data.get('busy_ids', []))
+            except Exception:
+                pass
+
+        # 沙盒 DB 已分配的设备也算 busy
+        allocated = sbx._get_allocated_devices()
+        for dev in allocated:
+            try:
+                busy.add(int(dev.split(':')[1]))
+            except (ValueError, IndexError):
+                pass
+
+        dev_status = {i: (1 if i in busy else 0) for i in all_ids}
+        total = len(all_ids)
+        idle = sum(1 for v in dev_status.values() if v == 0)
+        return {'total': total, 'idle': idle, 'dev_status': dev_status}
 
     # ── 活跃沙盒 ──────────────────────────────────────────────
 
@@ -93,6 +110,7 @@ class Node_Manager:
             'idle_mem': idle_mem,
             'total_devices': dev['total'],
             'idle_devices': dev['idle'],
+            'dev_status': dev.get('dev_status', {}),
             'active_sandboxes': sandboxes,
         }
 

@@ -58,7 +58,34 @@ _cg_mkdir() {
     local cg=$(_cg "$1"); mkdir -p "$cg"
 }
 _cg_rmdir() {
-    local cg=$(_cg "$1"); rmdir "$cg" 2>/dev/null || true
+    local cg=$(_cg "$1")
+    rmdir "$cg" 2>/dev/null && return 0
+    # systemd slice 可能阻止 rmdir，先停 slice 再重试
+    _unregister_systemd_slice "$1"
+    sleep 0.1
+    rmdir "$cg" 2>/dev/null || true
+}
+
+_register_systemd_slice() {
+    local slice_name="sandbox_${1}"
+    busctl call \
+        org.freedesktop.systemd1 \
+        /org/freedesktop/systemd1 \
+        org.freedesktop.systemd1.Manager \
+        StartTransientUnit \
+        "ssa(sv)a(sa(sv))" \
+        "$slice_name" "replace" \
+        0 0 2>/dev/null || true
+}
+
+_unregister_systemd_slice() {
+    local slice_name="sandbox_${1}"
+    busctl call \
+        org.freedesktop.systemd1 \
+        /org/freedesktop/systemd1 \
+        org.freedesktop.systemd1.Manager \
+        StopUnit \
+        "ss" "$slice_name" "replace" 2>/dev/null || true
 }
 _cg_join() {
     local name="$1" pid="$2"
@@ -162,6 +189,34 @@ parse_device() {
 
 _cg_id() {
     stat -c %i "$(_cg "$1")" 2>/dev/null
+}
+
+# 清理 eBPF 设备预留条目（即使 cgroup 目录已消失也必须执行）
+_cleanup_device_entries() {
+    local name="$1" cgid="$2"
+    local device_file="/tmp/neu_box_devices_${name}"
+    [ -f "$device_file" ] || return 0
+    local seen_majors=""
+    while read dev; do
+        [ -z "$dev" ] && continue
+        local major minor; read -r major minor <<< "$(parse_device "$dev")"
+        local minor_num
+        if [ "$minor" = "*" ]; then minor_num=4294967295
+        else minor_num=$minor; fi
+        # 精确设备条目（不依赖 cgid）
+        local key_hex; key_hex=$(printf '%02x %02x %02x %02x %02x %02x %02x %02x' \
+            $(( major & 0xFF )) $(( (major >> 8) & 0xFF )) 0 0 \
+            $(( minor_num & 0xFF )) $(( (minor_num >> 8) & 0xFF )) 0 0)
+        bpftool map delete pinned "$MAP_RESERVED_PIN" \
+            key hex $key_hex 2>/dev/null || true
+        # major 条目（需要 cgid，无 cgid 时跳过但不影响设备释放）
+        if [ -n "$cgid" ] && [[ " $seen_majors " != *" $major "* ]]; then
+            bpftool map delete pinned "$MAP_MAJORS_PIN" \
+                key hex $(_u64_hex "$cgid") $(_u32_hex "$major") 00 00 00 00 2>/dev/null || true
+            seen_majors="$seen_majors $major"
+        fi
+    done < "$device_file"
+    rm -f "$device_file"
 }
 
 # 自动检测 bpftool 支持的 cgroup device attach type
@@ -284,9 +339,10 @@ cmd_create() {
 
     echo "cgroup 版本: v${CGROUP_VER}"
 
-    # 创建 cgroup + 设置资源
+    # 先注册 systemd slice（Delegate=true），systemd 自动创建 cgroup 目录
     _cg_enable
-    _cg_mkdir "$name"
+    _register_systemd_slice "$name"
+    _cg_mkdir "$name"  # 补齐 systemd 未创建的目录
     _cg_set_cpu "$name" "$cpu"
     _cg_set_mem "$name" "$mem_bytes"
 
@@ -403,44 +459,18 @@ cmd_status() {
 cmd_destroy() {
     _require_root "destroy <name>"
     local name="$1"; [ -n "$name" ] || die "用法: $0 destroy <name>"
-    [ -d "$(_cg "$name")" ] || die "沙盒 '${name}' 不存在"
 
-    _cg_kickall "$name"
-
-    # 从 reserved_devices / reserved_majors 删除该沙盒预留的所有设备
+    # 先拿 cgid（必须在删目录之前）
     local cgid; cgid=$(_cg_id "$name")
-    local device_file="/tmp/neu_box_devices_${name}"
-    if [ -f "$device_file" ] && [ -n "$cgid" ]; then
-        local seen_majors=""
-        while read dev; do
-            [ -z "$dev" ] && continue
-            local major minor; read -r major minor <<< "$(parse_device "$dev")"
-            local minor_num
-            if [ "$minor" = "*" ]; then
-                minor_num=4294967295
-            else
-                minor_num=$minor
-            fi
-            # 删除精确设备条目
-            local key_hex
-            key_hex=$(printf '%02x %02x %02x %02x %02x %02x %02x %02x' \
-                $(( major & 0xFF )) $(( (major >> 8) & 0xFF )) 0 0 \
-                $(( minor_num & 0xFF )) $(( (minor_num >> 8) & 0xFF )) 0 0)
-            bpftool map delete pinned "$MAP_RESERVED_PIN" \
-                key hex $key_hex 2>/dev/null || true
-            # 去重后删除 major 条目
-            if [[ " $seen_majors " != *" $major "* ]]; then
-                bpftool map delete pinned "$MAP_MAJORS_PIN" \
-                    key hex $(_u64_hex "$cgid") $(_u32_hex "$major") 00 00 00 00 2>/dev/null || true
-                seen_majors="$seen_majors $major"
-            fi
-        done < "$device_file"
-        rm -f "$device_file"
+
+    if [ -d "$(_cg "$name")" ]; then
+        _unregister_systemd_slice "$name"
+        _cg_kickall "$name"
+        _cg_rmdir "$name"
     fi
 
-    _cg_rmdir "$name"
-
-    # BPF 程序保持在 root cgroup 上，不卸载（其他沙盒可能仍在使用）
+    # 清理 eBPF map 条目（即使 cgroup 已消失也必须执行）
+    _cleanup_device_entries "$name" "${cgid:-}"
     echo "✓ 沙盒 '${name}' 已销毁"
 }
 
@@ -470,6 +500,9 @@ cmd_cleanup() {
         name="${name%/}"
         echo -n "销毁沙盒: $name ... "
 
+        # 0. 注销 systemd slice
+        _unregister_systemd_slice "$name"
+
         # 1. 杀死 cgroup 内所有进程
         _cg_kickall "$name" 2>/dev/null || true
 
@@ -491,11 +524,13 @@ cmd_cleanup() {
         done
         sleep 0.2
 
-        # 4. 删除主 cgroup 目录
+        # 4. 清 eBPF map 条目
+        local cgid; cgid=$(stat -c %i "$d" 2>/dev/null)
+        _cleanup_device_entries "$name" "${cgid:-}"
+
+        # 5. 删除主 cgroup 目录
         if rmdir "$d" 2>/dev/null; then
             echo "✓"
-            # 清理设备文件
-            rm -f "/tmp/neu_box_devices_${name}" 2>/dev/null || true
         else
             echo "✗ 失败（目录非空或无权限）"
             failed=$((failed + 1))

@@ -269,9 +269,13 @@ class SbxManager:
             result = self._run_script('destroy', name)
             if result.returncode != 0:
                 logger.error("销毁沙盒 '%s' 失败: %s", name, result.stderr.strip())
-                # 如果 cgroup 确实没了，至少清理 DB
                 if not os.path.isdir(self._cg_path(name)):
                     self.db.delete_sandbox(name)
+                return False
+
+            # 脚本返回成功 ≠ cgroup 目录已消失（systemd slice 可能阻止 rmdir）
+            if os.path.isdir(self._cg_path(name)):
+                logger.warning("沙盒 '%s' cgroup 目录未清除，保留 DB 记录等待重试", name)
                 return False
 
             self.db.delete_sandbox(name)
@@ -305,38 +309,45 @@ class SbxManager:
     def allocate_for_terminal(self, terminal_id: str,
                               cpu: int = 0, mem: str = "0",
                               device_num: int = 0,
+                              device_ids: Optional[List[str]] = None,
                               port: int = None) -> Optional[dict]:
-        """为终端会话分配沙盒。
+        """为终端/手动 acquire 分配沙盒。
 
-        根据 device_num 从空闲设备池中分配指定数量的设备节点，
         沙盒命名为 term_<terminal_id>。
 
         Args:
-            terminal_id: 终端唯一标识（如 ttyd 的 PID）
-            cpu:         CPU 核数 (0=不限)
-            mem:         内存限制 (如 "512M", "2G", "0"=不限)
-            device_num:  要分配的设备数量 (0=不分配设备)
+            terminal_id: 终端唯一标识（如 ttyd 的 PID 或 user_pid）
+            device_num:  要分配的设备数量 (0=不分配，device_ids 为空时自动选取)
+            device_ids:  用户指定的设备号列表 (如 ["235:1","235:3"])，优先于 device_num
+            cpu/mem/port: 同 create_sandbox
 
         Returns:
             成功返回 {'sandbox_name': str, 'devices': [str]}，失败返回 None。
         """
-        sandbox_name = f"term_{terminal_id}"
+        sandbox_name = f"term_{terminal_id}.slice"
 
         devices = []
-        if device_num > 0:
-            # 1. 通过 Node_Manager 校验系统空闲设备数
+        if device_ids:
+            # 用户指定设备：校验是否全部空闲
+            free = self._get_free_devices()
+            for d in device_ids:
+                if d not in free:
+                    logger.warning("指定设备 %s 不可用 (已被占用或不存在)", d)
+                    return None
+            devices = list(device_ids)
+            logger.warning("使用指定设备: %s", devices)
+        elif device_num > 0:
+            # 自动分配：从空闲池选取 device_num 个
             if not self._validate_idle_count(device_num):
                 return None
 
-            # 2. 从 DB 计算实际空闲设备
             free = self._get_free_devices()
             if len(free) < device_num:
-                logger.warning("设备不足: 需要 %s 个, DB 空闲 %s 个 (free=%s)",
-                               device_num, len(free), free)
+                logger.warning("设备不足: 需要 %s 个, DB 空闲 %s 个", device_num, len(free))
                 return None
 
             devices = free[:device_num]
-            logger.warning("分配设备: %s (从空闲池 %s 中选取 %s 个)", devices, free, device_num)
+            logger.warning("自动分配设备: %s (从空闲池 %s 选取)", devices, free)
 
         success = self.create_sandbox(
             sandbox_name,

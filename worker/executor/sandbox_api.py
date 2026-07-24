@@ -19,6 +19,29 @@ logger = logging.getLogger(__name__)
 sandbox_bp = Blueprint('sandbox', __name__)
 
 
+def _normalize_device_ids(raw: list, all_devices: list[str]) -> list[str]:
+    """将用户指定的设备 ID 归一化为 ["major:minor", ...] 格式。
+
+    支持两种输入：
+      - 纯数字: ["1","3"] → 在所有设备中匹配 minor 号 → ["235:1","235:3"]
+      - major:minor: ["235:1","235:3"] → 原样返回
+    """
+    result = []
+    for d in raw:
+        d = str(d).strip()
+        if not d:
+            continue
+        if ':' in d:
+            result.append(d)
+        else:
+            # 纯数字 → 在所有设备中匹配 minor 号
+            for dev in all_devices:
+                if dev.endswith(f':{d}'):
+                    result.append(dev)
+                    break
+    return result if result else None
+
+
 def _find_sandbox_for_pid(pid: int) -> str | None:
     """通过 /proc/<pid>/cgroup 查找 PID 所在的沙盒名称。"""
     try:
@@ -33,13 +56,15 @@ def _find_sandbox_for_pid(pid: int) -> str | None:
 
 
 def _verify_pid_owner(pid: int, username: str) -> bool:
-    """校验 PID 是否属于 username（通过 /proc/<pid>/status 的 Uid 字段）。"""
+    """校验 PID 是否属于 username。root 进程（如 Docker 容器）直接放行。"""
     try:
-        pw = pwd.getpwnam(username)
         with open(f'/proc/{pid}/status') as f:
             for line in f:
                 if line.startswith('Uid:'):
                     real_uid = int(line.split()[1])
+                    if real_uid == 0:          # root → Docker 容器等，放行
+                        return True
+                    pw = pwd.getpwnam(username)
                     return real_uid == pw.pw_uid
     except Exception:
         pass
@@ -61,6 +86,7 @@ def acquire():
     username = (body.get('username') or '').strip()
     pid = body.get('pid', 0)
     device_num = body.get('device_num', 0)
+    device_ids = body.get('device_ids')  # 可选: ["1","3","5"]（minor 号）或 ["235:1","235:3"]（major:minor）
     cpu = body.get('cpu', 0)
     mem_val = body.get('memory', 0)
     mem_unit = body.get('mem_unit', 'GB')
@@ -89,6 +115,11 @@ def acquire():
     else:
         sandbox_mem = f'{mem_val}M'
 
+    # 归一化 device_ids → ["major:minor", ...]
+    normalized_ids = None
+    if device_ids and isinstance(device_ids, list):
+        normalized_ids = _normalize_device_ids(device_ids, sbx._discover_device_nodes())
+
     # 创建沙盒并分配设备
     sbx = SbxManager.get_instance()
     terminal_id = f"{username}_{pid}"
@@ -96,7 +127,8 @@ def acquire():
         terminal_id,
         cpu=cpu,
         mem=sandbox_mem,
-        device_num=device_num,
+        device_num=device_num if not normalized_ids else 0,
+        device_ids=normalized_ids,
     )
     if result is None:
         return {'error': '沙盒创建失败，设备可能不足'}, 503

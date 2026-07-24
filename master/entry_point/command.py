@@ -35,6 +35,7 @@ def run():
         'memory': data.get('memory', 0),
         'mem_unit': data.get('mem_unit', 'GB'),
         'device_num': data.get('device_num', 0),
+        'device_ids': data.get('device_ids'),  # 可选，用户指定设备列表
     }
 
     try:

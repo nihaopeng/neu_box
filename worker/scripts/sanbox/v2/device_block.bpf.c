@@ -108,26 +108,30 @@ int device_reserve(struct bpf_cgroup_dev_ctx *ctx) {
     }
 
     __u64 my_cgid = bpf_get_current_cgroup_id();
+    // Docker/systemd 在沙盒下创建嵌套 cgroup（docker-xxx.scope），
+    // 容器进程的实际 cgroup ID 与沙盒不同。也检查父 cgroup ID。
+    __u64 parent_cgid = bpf_get_current_ancestor_cgroup_id(1);
 
     // 1) 精确匹配 major:minor
     struct dev_key exact_key = { .major = ctx->major, .minor = ctx->minor };
-    struct cg_major_key mk = { .cgid = my_cgid, .major = ctx->major, .__pad = 0 };
     __u64 *owner = bpf_map_lookup_elem(&reserved_devices, &exact_key);
-    __u8 *has_major = bpf_map_lookup_elem(&reserved_majors, &mk);
 
     if (owner) {
-        if (*owner == my_cgid) {
-            // bpf_printk("device_reserve: ALLOW (my device) major=%u minor=%u cgid=%llu",ctx->major, ctx->minor, my_cgid);
-            return 1;   // 我预留的 → 放行
+        if (*owner == my_cgid || *owner == parent_cgid) {
+            return 1;   // 我或父 cgroup 预留的 → 放行
         } else {
-            // bpf_printk("device_reserve: DENY (other's device) major=%u minor=%u",ctx->major, ctx->minor);
-            // bpf_printk("device_reserve: DENY my_cgid=%llu owner_cgid=%llu",my_cgid, *owner);
             return 0;   // 别人预留的 → 拒绝
         }
     }
-    if (has_major && *has_major) {
-        // bpf_printk("device_reserve: DENY (major reserved by other) major=%u cgid=%llu",ctx->major, my_cgid);
-        return 0;   // 该 major 被预留了，但不是我预留的 → 拒绝
+
+    // 2) major 通配检查
+    struct cg_major_key mk = { .cgid = my_cgid, .major = ctx->major, .__pad = 0 };
+    struct cg_major_key mk_parent = { .cgid = parent_cgid, .major = ctx->major, .__pad = 0 };
+    __u8 *has_major = bpf_map_lookup_elem(&reserved_majors, &mk);
+    __u8 *has_major_parent = bpf_map_lookup_elem(&reserved_majors, &mk_parent);
+
+    if ((has_major && *has_major) || (has_major_parent && *has_major_parent)) {
+        return 0;   // 该 major 被预留了，但不是我或父预留的 → 拒绝
     }
 
     // bpf_printk("device_reserve: ALLOW (unreserved) major=%u minor=%u cgid=%llu",ctx->major, ctx->minor, my_cgid);

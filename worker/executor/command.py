@@ -124,7 +124,8 @@ def execute_in_sandbox(
             # 1) 写 PID 到 cgroup（仍是 root）
             with open(cg_procs, 'w') as f:
                 f.write(str(os.getpid()))
-            # 2) 切到目标用户
+            # 2) 初始化附加组（docker 等），然后切到目标用户
+            os.initgroups(username, target_gid)
             os.setgid(target_gid)
             os.setuid(target_uid)
             os.chdir(target_dir)
@@ -327,12 +328,11 @@ class TaskQueue:
 
     def submit(self, user_id: str, command: str,
                cpu: int = 0, mem: str = "0",
-               device_num: int = 0) -> str:
-        """提交任务到队列，返回 task_id。user_id 即系统用户名。
-        设备分配推迟到执行时，提交时只记录需求数量。"""
+               device_num: int = 0,
+               device_ids: list = None) -> str:
+        """提交任务到队列。device_ids 指定设备时优先于 device_num 自动分配。"""
         task_id = uuid.uuid4().hex[:12]
 
-        # 持久化到 DB
         self._db.insert_task(
             task_id=task_id, user_id=user_id, command=command,
             cpu=cpu, mem=mem, devices=[])
@@ -344,6 +344,7 @@ class TaskQueue:
             'cpu': cpu,
             'mem': mem,
             'device_num': device_num,
+            'device_ids': device_ids or [],   # 用户指定的设备列表
             'devices': [],          # 执行时才分配
             'status': 'queued',
             'position': 0,
@@ -528,12 +529,23 @@ class TaskQueue:
                     first_tid = next(iter(self._pending))
                     device_num = self._pending[first_tid].get('device_num', 0)
 
+                # 优先使用用户指定的 device_ids，其次自动分配
+                device_ids = self._pending[first_tid].get('device_ids', []) or []
                 allocated = []
-                if device_num > 0:
+                if device_ids:
+                    with self._device_lock:
+                        free = sbx._get_free_devices()
+                        unavailable = [d for d in device_ids if d not in free]
+                        if unavailable:
+                            logger.warning('指定设备 %s 不可用，等待中...', unavailable)
+                            time.sleep(3)
+                            continue
+                        allocated = list(device_ids)
+                elif device_num > 0:
                     with self._device_lock:
                         free = sbx._get_free_devices()
                         if len(free) < device_num:
-                            time.sleep(3)  # 设备不足，安静等
+                            time.sleep(3)
                             continue
                         allocated = free[:device_num]
 
@@ -629,15 +641,21 @@ def run_command():
         sandbox_mem = f'{mem_val}M'
 
     device_num = body.get('device_num', 0)
+    device_ids = body.get('device_ids')  # 可选: ["1","3"] 或 ["235:1","235:3"]
     if not isinstance(device_num, int) or device_num < 0:
         device_num = 0
 
     # 防呆：请求数量超过系统设备总数，直接拒绝
+    sbx = SbxManager.get_instance()
     if device_num > 0:
-        sbx = SbxManager.get_instance()
         total = len(sbx._discover_device_nodes())
         if device_num > total:
             return {'error': f'设备不足: 需要 {device_num} 个, 系统共 {total} 个'}, 400
+
+    # 归一化 device_ids
+    normalized_ids = None
+    if device_ids and isinstance(device_ids, list):
+        normalized_ids = _normalize_device_ids(device_ids, sbx._discover_device_nodes())
 
     tq = TaskQueue.get_instance()
     task_id = tq.submit(
@@ -645,7 +663,8 @@ def run_command():
         command=command,
         cpu=cpu,
         mem=sandbox_mem,
-        device_num=device_num
+        device_num=device_num,
+        device_ids=normalized_ids,
     )
 
     # 从 DB 获取当前队列位置
@@ -762,6 +781,23 @@ def _parse_int(value: str | None, default: int) -> int:
         return int(value)
     except (ValueError, TypeError):
         return default
+
+
+def _normalize_device_ids(raw: list, all_devices: list[str]) -> list[str] | None:
+    """将用户指定设备 ID 归一化: 纯数字→匹配 minor 号, "m:M"→原样。"""
+    result = []
+    for d in raw:
+        d = str(d).strip()
+        if not d:
+            continue
+        if ':' in d:
+            result.append(d)
+        else:
+            for dev in all_devices:
+                if dev.endswith(f':{d}'):
+                    result.append(dev)
+                    break
+    return result if result else None
 
 
 # ── 启动 TaskQueue（在 import 时自动启动） ──

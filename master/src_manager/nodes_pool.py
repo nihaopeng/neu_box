@@ -26,6 +26,7 @@ class Nodes:
         self.idle_mem = 0                # bytes
         self.total_devices = 0
         self.idle_devices = 0
+        self.dev_status = {}     # {minor: 1/0}, 1=忙碌 0=空闲
         self.active_sandboxes = 0
         self.last_heartbeat = 0.0        # timestamp
 
@@ -38,6 +39,7 @@ class Nodes:
         self.idle_mem = data.get('idle_mem', self.idle_mem)
         self.total_devices = data.get('total_devices', self.total_devices)
         self.idle_devices = data.get('idle_devices', self.idle_devices)
+        self.dev_status = data.get('dev_status', self.dev_status)
         self.active_sandboxes = data.get('active_sandboxes', self.active_sandboxes)
         self.last_heartbeat = time.time()
 
@@ -154,6 +156,7 @@ class Nodes_Pool:
                 'idle_mem': node.idle_mem,
                 'total_devices': node.total_devices,
                 'idle_devices': node.idle_devices,
+                'dev_status': node.dev_status,
                 'active_sandboxes': node.active_sandboxes,
             })
         return result

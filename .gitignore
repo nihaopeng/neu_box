@@ -12,3 +12,4 @@ master/static/uploads/*
 !master/static/uploads/.gitkeep
 *.log
 *.pytest_cache/
+nohup.out
