@@ -49,6 +49,7 @@ REQUIRED_COLUMNS = {
         "mem", "devices", "stdout", "stderr", "returncode", "timed_out",
         "error", "created_at", "started_at", "finished_at", "device_num",
         "device_ids", "est_time", "target_spec", "priority",
+        "command_mode", "command_argv",
     ),
     "sandboxes": (
         "name", "cpu", "mem", "devices", "cgroup_path", "created_at",
@@ -143,22 +144,30 @@ class Database:
                     position: int = 0,
                     device_num: int = 0, device_ids: list = None,
                     target: dict | None = None, est_time: int = 0,
-                    priority: int = 0):
+                    priority: int = 0, *, command_mode: str = 'command',
+                    command_argv: list[str] | None = None):
         if not isinstance(priority, int) or isinstance(priority, bool) \
                 or not 0 <= priority <= 1:
             raise ValueError(
                 f'priority 只能是 0（普通）或 1（赶论文）: {priority!r}')
+        if command_mode not in {'command', 'script', 'argv'}:
+            raise ValueError(f'不支持的任务执行模式: {command_mode!r}')
+        if command_mode == 'argv' and not command_argv:
+            raise ValueError('argv 任务必须提供 command_argv')
         conn = self._get_conn()
         target = dict(target or {'type': 'host'})
         conn.execute(
             'INSERT INTO tasks (task_id, user_id, command, status, position, '
             'cpu, mem, devices, created_at, device_num, device_ids, '
-            'target_spec, est_time, priority) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'target_spec, est_time, priority, command_mode, command_argv) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (task_id, user_id, command, 'queued', position,
              cpu, mem, json.dumps(devices or []), time.time(), device_num,
              json.dumps(device_ids or []),
-             json.dumps(target, ensure_ascii=False), est_time, priority))
+             json.dumps(target, ensure_ascii=False), est_time, priority,
+             command_mode,
+             json.dumps(command_argv, ensure_ascii=False)
+             if command_argv is not None else None))
         conn.commit()
 
     def update_task_status(self, task_id: str, status: str,
@@ -550,4 +559,10 @@ class Database:
                 d['target_spec'] = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 d['target_spec'] = {}
+        raw_argv = d.get('command_argv')
+        if isinstance(raw_argv, str):
+            try:
+                d['command_argv'] = json.loads(raw_argv)
+            except (json.JSONDecodeError, TypeError):
+                d['command_argv'] = None
         return d

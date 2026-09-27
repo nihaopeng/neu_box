@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // execCall 记录一次假 exec 的调用，测试靠它断言最终交给 docker 的 argv。
@@ -199,10 +200,12 @@ const testContainerID = "0123456789abcdef0123456789abcdef" +
 
 // startWorker 复刻 Worker 的借条端点：POST 存借条、GET 报认领状态。
 type startWorker struct {
-	Lent     map[string]any
-	Queries  []url.Values
-	State    string // GET 报的状态；空串当 pending
-	PostCode int    // 非 0 时 POST 直接返回它
+	Lent          map[string]any
+	Queries       []url.Values
+	State         string // GET 报的状态；空串当 pending
+	PostCode      int    // 非 0 时 POST 直接返回它
+	IntentSandbox string
+	Queried       chan struct{}
 }
 
 func (worker *startWorker) start(t *testing.T) *httptest.Server {
@@ -229,13 +232,23 @@ func (worker *startWorker) start(t *testing.T) *httptest.Server {
 				})
 			case http.MethodGet:
 				worker.Queries = append(worker.Queries, request.URL.Query())
+				if worker.Queried != nil {
+					select {
+					case worker.Queried <- struct{}{}:
+					default:
+					}
+				}
 				state := worker.State
 				if state == "" {
 					state = "pending"
 				}
+				sandbox := worker.IntentSandbox
+				if sandbox == "" {
+					sandbox = "sbx_yuxd_42.slice"
+				}
 				writeJSON(t, writer, http.StatusOK, map[string]any{
 					"container_id": request.URL.Query().Get("container_id"),
-					"sandbox_name": "sbx_yuxd_42.slice",
+					"sandbox_name": sandbox,
 					"state":        state,
 				})
 			default:
@@ -250,17 +263,37 @@ type runCall struct {
 	argv    []string
 	env     []string
 	inspect []string
+	stops   []string
 }
+
+type fakeStartedCommand struct {
+	wait func() (int, error)
+	kill func() error
+}
+
+func (command fakeStartedCommand) Wait() (int, error) { return command.wait() }
+func (command fakeStartedCommand) Kill() error        { return command.kill() }
 
 func recordRun(application *app, code int) *runCall {
 	call := &runCall{}
 	application.outputFn = func(path string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "stop" {
+			call.stops = append(call.stops, args[1])
+			return []byte(args[1] + "\n"), nil
+		}
 		call.inspect = append([]string{path}, args...)
-		return []byte(testContainerID + "\n"), nil
+		return []byte(`{"Id":"` + testContainerID + `","State":{"Running":false,"Status":"exited"},"HostConfig":{"Annotations":{"sandbox_cgroup":"sbx_old.slice"}}}`), nil
 	}
 	application.runFn = func(path string, argv []string, env []string) (int, error) {
 		call.path, call.argv, call.env = path, argv, env
 		return code, nil
+	}
+	application.startFn = func(path string, argv []string, env []string) (StartedCommand, error) {
+		call.path, call.argv, call.env = path, argv, env
+		return fakeStartedCommand{
+			wait: func() (int, error) { return code, nil },
+			kill: func() error { return nil },
+		}, nil
 	}
 	return call
 }
@@ -287,7 +320,7 @@ func TestDockerStartLendsOwnSandboxThenStartsContainer(t *testing.T) {
 		t.Fatalf("借条应按容器 ID 记，实际 %v", worker.Lent["container_id"])
 	}
 	wantInspect := []string{"/usr/bin/docker", "inspect", "--format",
-		"{{.Id}}", "neu-test"}
+		"{{json .}}", "neu-test"}
 	if !reflect.DeepEqual(call.inspect, wantInspect) {
 		t.Fatalf("inspect got %q\nwant %q", call.inspect, wantInspect)
 	}
@@ -327,8 +360,137 @@ func TestDockerStartPassesDockerOptionsThrough(t *testing.T) {
 	}
 }
 
-// 借条存不上（不在沙盒里 / 沙盒不是自己的）：照样 start，只是零卡，但要明说。
-func TestDockerStartStartsAnywayWithoutASandbox(t *testing.T) {
+func TestDockerStartAttachConfirmsBeforeWorkloadExits(t *testing.T) {
+	worker := &startWorker{State: "consumed", Queried: make(chan struct{}, 1)}
+	server := worker.start(t)
+	defer server.Close()
+
+	application, _, errOut := testApplication(server.URL)
+	call := recordRun(application, 0)
+	release := make(chan struct{})
+	application.startFn = func(path string, argv []string, env []string) (StartedCommand, error) {
+		call.path, call.argv, call.env = path, argv, env
+		return fakeStartedCommand{
+			wait: func() (int, error) { <-release; return 23, nil },
+			kill: func() error { close(release); return nil },
+		}, nil
+	}
+	result := make(chan int, 1)
+	go func() { result <- application.run([]string{"docker", "start", "neu-test", "-a"}) }()
+	select {
+	case <-worker.Queried:
+	case <-time.After(time.Second):
+		t.Fatal("start -a 应在容器运行期间回查借条")
+	}
+	select {
+	case code := <-result:
+		t.Fatalf("容器未退出时 start -a 不应返回：%d", code)
+	default:
+	}
+	close(release)
+	select {
+	case code := <-result:
+		if code != 23 {
+			t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("容器退出后应返回 Docker 的退出码")
+	}
+	if !reflect.DeepEqual(call.argv, []string{"/usr/bin/docker", "start", "neu-test", "-a"}) {
+		t.Fatalf("docker start -a 参数被改动: %q", call.argv)
+	}
+}
+
+func TestDockerStartInteractiveAlsoRequiresConcurrentConfirmation(t *testing.T) {
+	for _, option := range []string{"-i", "--interactive", "-i=true", "--interactive=true"} {
+		attached, err := dockerStartAttachOption([]string{option})
+		if err != nil || !attached {
+			t.Fatalf("%s: attached=%t err=%v", option, attached, err)
+		}
+	}
+	for _, option := range []string{"-i=false", "--interactive=false"} {
+		attached, err := dockerStartAttachOption([]string{option})
+		if err != nil || attached {
+			t.Fatalf("%s: attached=%t err=%v", option, attached, err)
+		}
+	}
+}
+
+func TestDockerStartRejectsIntentConsumedByDifferentSandbox(t *testing.T) {
+	worker := &startWorker{State: "consumed", IntentSandbox: "sbx_other.slice"}
+	server := worker.start(t)
+	defer server.Close()
+	application, _, errOut := testApplication(server.URL)
+	call := recordRun(application, 0)
+	if code := application.run([]string{"docker", "start", "neu-test"}); code == 0 {
+		t.Fatalf("借条被别的沙盒认领仍返回成功: %s", errOut.String())
+	}
+	if !reflect.DeepEqual(call.stops, []string{testContainerID}) {
+		t.Fatalf("借条串线后应停止本次容器: %v", call.stops)
+	}
+}
+
+func TestDockerStartAttachCancelsClientAndStopsContainerOnBindingFailure(t *testing.T) {
+	worker := &startWorker{State: "consumed", IntentSandbox: "sbx_other.slice"}
+	server := worker.start(t)
+	defer server.Close()
+	application, _, errOut := testApplication(server.URL)
+	call := recordRun(application, 0)
+	clientStopped := make(chan struct{})
+	killed := false
+	application.startFn = func(path string, argv []string, env []string) (StartedCommand, error) {
+		call.path, call.argv, call.env = path, argv, env
+		return fakeStartedCommand{
+			wait: func() (int, error) { <-clientStopped; return 137, nil },
+			kill: func() error { killed = true; close(clientStopped); return nil },
+		}, nil
+	}
+	if code := application.run([]string{"docker", "start", "neu-test", "-a"}); code == 0 {
+		t.Fatalf("错误借条不能让 -a 成功: %s", errOut.String())
+	}
+	if !killed || !reflect.DeepEqual(call.stops, []string{testContainerID}) {
+		t.Fatalf("需先中止 Docker 客户端并停止容器: killed=%v stops=%v", killed, call.stops)
+	}
+}
+
+func TestDockerStartAttachStopsDelayedContainerAfterEarlyStopMiss(t *testing.T) {
+	worker := &startWorker{State: "consumed", IntentSandbox: "sbx_other.slice"}
+	server := worker.start(t)
+	defer server.Close()
+	application, _, errOut := testApplication(server.URL)
+	inspects, stops := 0, 0
+	application.outputFn = func(_ string, args ...string) ([]byte, error) {
+		if args[0] == "inspect" {
+			inspects++
+			return dockerInspectJSON(inspects >= 3, true), nil
+		}
+		if args[0] == "stop" {
+			stops++
+			if stops == 1 {
+				return nil, errors.New("container is not running yet")
+			}
+			return []byte(testContainerID), nil
+		}
+		t.Fatalf("unexpected docker call: %q", args)
+		return nil, nil
+	}
+	clientStopped := make(chan struct{})
+	application.startFn = func(string, []string, []string) (StartedCommand, error) {
+		return fakeStartedCommand{
+			wait: func() (int, error) { <-clientStopped; return 137, nil },
+			kill: func() error { close(clientStopped); return nil },
+		}, nil
+	}
+	if code := application.run([]string{"docker", "start", "neu-test", "-a"}); code == 0 {
+		t.Fatalf("错误借条不能成功: %s", errOut.String())
+	}
+	if stops != 2 || inspects < 3 {
+		t.Fatalf("需要发现延迟启动后再停止: stops=%d inspects=%d", stops, inspects)
+	}
+}
+
+// 借条存不上时，不能启动一个无卡容器让后续脚本继续执行。
+func TestDockerStartRejectsMissingSandboxBeforeStarting(t *testing.T) {
 	worker := &startWorker{PostCode: http.StatusConflict}
 	server := worker.start(t)
 	defer server.Close()
@@ -337,16 +499,14 @@ func TestDockerStartStartsAnywayWithoutASandbox(t *testing.T) {
 	call := recordRun(application, 0)
 
 	code := application.run([]string{"docker", "start", "neu-test"})
-	if code != 0 {
-		t.Fatalf("借不到沙盒不该拦住 start：exit=%d stderr=%s", code, errOut.String())
+	if code == 0 {
+		t.Fatalf("借不到沙盒应拒绝启动：exit=%d stderr=%s", code, errOut.String())
 	}
-	want := []string{"/usr/bin/docker", "start", "neu-test"}
-	if !reflect.DeepEqual(call.argv, want) {
-		t.Fatalf("got  %q\nwant %q", call.argv, want)
+	if call.argv != nil {
+		t.Fatalf("不能启动容器: %q", call.argv)
 	}
-	if !strings.Contains(errOut.String(), "not_in_sandbox") ||
-		!strings.Contains(errOut.String(), "看不到 NPU") {
-		t.Fatalf("要说清没借到卡：%s", errOut.String())
+	if !strings.Contains(errOut.String(), "not_in_sandbox") {
+		t.Fatalf("要说清借条为何失败：%s", errOut.String())
 	}
 	// 没借条就不用回查认领结果。
 	if len(worker.Queries) != 0 {
@@ -354,8 +514,8 @@ func TestDockerStartStartsAnywayWithoutASandbox(t *testing.T) {
 	}
 }
 
-// 容器起来了但借条没被认领（过期等）：明说零卡；start 本身算成功。
-func TestDockerStartWarnsWhenTheLendIsNotConsumed(t *testing.T) {
+// 容器起来了但借条没被认领（过期等）：必须停止并返回失败。
+func TestDockerStartStopsWhenTheLendIsNotConsumed(t *testing.T) {
 	worker := &startWorker{State: "pending"}
 	server := worker.start(t)
 	defer server.Close()
@@ -364,15 +524,17 @@ func TestDockerStartWarnsWhenTheLendIsNotConsumed(t *testing.T) {
 	call := recordRun(application, 0)
 
 	code := application.run([]string{"docker", "start", "neu-test"})
-	if code != 0 {
-		t.Fatalf("start 成功了就该退 0：exit=%d stderr=%s", code, errOut.String())
+	if code == 0 {
+		t.Fatalf("借卡未确认必须失败：exit=%d stderr=%s", code, errOut.String())
 	}
 	if call.argv == nil {
 		t.Fatal("确认是 start 之后的事，docker 必须先起过")
 	}
-	if !strings.Contains(errOut.String(), "sbx_yuxd_42.slice") ||
-		!strings.Contains(errOut.String(), "看不到 NPU") {
-		t.Fatalf("警告要说清该绑哪个沙盒：%s", errOut.String())
+	if len(call.stops) != 1 || call.stops[0] != testContainerID {
+		t.Fatalf("借卡失败后必须尝试停止原容器: %v", call.stops)
+	}
+	if !strings.Contains(errOut.String(), "sbx_yuxd_42.slice") {
+		t.Fatalf("错误要说清该绑哪个沙盒：%s", errOut.String())
 	}
 }
 
@@ -380,6 +542,8 @@ func TestDockerStartNeedsTheContainerFirst(t *testing.T) {
 	for _, args := range [][]string{
 		{"docker", "start"},
 		{"docker", "start", "-a", "neu-test"},
+		{"docker", "start", "neu-test", "other-container"},
+		{"docker", "start", "neu-test", "--checkpoint", "old"},
 	} {
 		application, _, errOut := testApplication("http://127.0.0.1:1")
 		call := recordRun(application, 0)
@@ -390,6 +554,24 @@ func TestDockerStartNeedsTheContainerFirst(t *testing.T) {
 		if call.argv != nil {
 			t.Fatalf("%v: 不该去 start", args)
 		}
+	}
+}
+
+func TestDockerStartRejectsContainerWithoutRuntimeAnnotation(t *testing.T) {
+	application, _, errOut := testApplication("http://127.0.0.1:1")
+	application.outputFn = func(_ string, args ...string) ([]byte, error) {
+		if args[0] != "inspect" {
+			t.Fatalf("unmanaged container should not be started: %v", args)
+		}
+		return dockerInspectJSON(false, false), nil
+	}
+	application.runFn = func(string, []string, []string) (int, error) {
+		t.Fatal("unmanaged container should not start")
+		return 0, nil
+	}
+	if code := application.run([]string{"docker", "start", "neu-test"}); code == 0 ||
+		!strings.Contains(errOut.String(), "annotation") {
+		t.Fatalf("unmanaged start: exit=%d stderr=%s", code, errOut.String())
 	}
 }
 

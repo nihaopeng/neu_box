@@ -506,18 +506,18 @@ def test_hook_is_idempotent_when_runc_retries(
     assert [status for _path, status, _body in worker.answers] == [201, 200]
 
 
-def test_hook_starts_without_authorization_when_sandbox_is_unknown(
+def test_hook_rejects_unknown_sandbox(
         worker, hook_binary, container_init_pid, bundle):
-    """Worker 明确确认沙盒不存在：容器可启动，但不登记、不授予设备。"""
+    """Worker 确认沙盒不存在时，hook 拒绝受管容器启动。"""
     worker.db.insert_sandbox(SANDBOX)
 
     result = _run_hook(
         hook_binary, worker.url,
         _oci_state(container_init_pid, bundle, UNKNOWN_SANDBOX))
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode != 0, result.stderr
     assert result.stdout == ''
-    assert '无授权' in result.stderr
+    assert 'sandbox_not_found' in result.stderr
 
     assert worker.db.list_containers() == []
     assert worker.bindings == []
@@ -592,17 +592,13 @@ def test_registration_rejection_is_not_ascii_escaped(worker):
     (500, '500 Internal Server Error', None),
     # 请求本身有问题。契约里 400 没有 code —— 能说的只有 HTTP 状态和 error 文本。
     (400, '400 Bad Request', None),
-    # 身份冲突仍须拒绝，不能和“沙盒正在销毁”的零卡放行混淆。
+    # 身份冲突也须拒绝，和其他 Worker 错误采用同一门禁。
     (409, '409 Conflict', 'runtime_identity_changed'),
 ])
 def test_hook_fails_closed_when_the_worker_says_no(
         fake_worker, hook_binary, container_init_pid, bundle,
         status, status_text, code):
-    """Worker 返回真正的错误（500 / 400 / 身份冲突）：容器必须起不来。
-
-    只有 ``sandbox_not_found`` / ``sandbox_not_active`` 是零卡放行；其余错误
-    都退非零。这条不能靠 Worker 平时不出错来兜底，所以主动造失败响应。
-    """
+    """Worker 返回 500 / 400 / 身份冲突时，hook 必须拒绝启动。"""
     # 原因文本里特意不放状态码：下面那处断言只可能由状态行（Go 的
     # ``response.Status``，也就是 500 后面跟的那串英文）满足，端口号冒充不了。
     #

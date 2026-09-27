@@ -3,10 +3,12 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/neusbox/neu_box/client/neubox/internal/api"
 )
@@ -27,15 +29,17 @@ type commandMount struct {
 }
 
 type commandRequest struct {
-	UserID    string         `json:"user_id"`
-	Command   string         `json:"command"`
-	DeviceNum int            `json:"device_num"`
-	DeviceIDs []string       `json:"device_ids"`
-	CPU       int            `json:"cpu"`
-	Memory    int            `json:"memory"`
-	MemUnit   string         `json:"mem_unit"`
-	Priority  int            `json:"priority"`
-	Target    *commandTarget `json:"target,omitempty"`
+	UserID      string         `json:"user_id"`
+	Command     string         `json:"command,omitempty"`
+	CommandArgv []string       `json:"command_argv,omitempty"`
+	Script      string         `json:"script,omitempty"`
+	DeviceNum   int            `json:"device_num"`
+	DeviceIDs   []string       `json:"device_ids"`
+	CPU         int            `json:"cpu"`
+	Memory      int            `json:"memory"`
+	MemUnit     string         `json:"mem_unit"`
+	Priority    int            `json:"priority"`
+	Target      *commandTarget `json:"target,omitempty"`
 }
 
 type commandResponse struct {
@@ -59,13 +63,13 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		if argument == "--" {
-			if options.command != "" {
+			if options.commandSet || options.scriptPath != "" {
 				return options, errors.New("submit 只能指定一个命令")
 			}
-			if index+1 >= len(args) {
+			if index+1 >= len(args) || args[index+1] == "" {
 				return options, errors.New("submit 缺少命令；请在 -- 后指定命令")
 			}
-			options.command = joinCommandArguments(args[index+1:])
+			options.commandArgv = append([]string(nil), args[index+1:]...)
 			break
 		}
 		if handled, err := consumeResourceOption(args, &index, &options.resourceOptions); handled || err != nil {
@@ -77,7 +81,7 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 
 		switch argument {
 		case "--command":
-			if options.command != "" {
+			if options.commandSet || options.scriptPath != "" {
 				return options, errors.New("submit 只能指定一个命令")
 			}
 			raw, err := optionValue(args, &index)
@@ -85,8 +89,21 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 				return options, err
 			}
 			options.command = strings.TrimSpace(raw)
+			options.commandSet = true
+		case "--script":
+			if options.commandSet || options.scriptPath != "" {
+				return options, errors.New("submit 只能指定一个命令")
+			}
+			raw, err := optionValue(args, &index)
+			if err != nil {
+				return options, err
+			}
+			if strings.TrimSpace(raw) == "" {
+				return options, errors.New("--script 需要文件路径或 -（标准输入）")
+			}
+			options.scriptPath = raw
 		case "--container":
-			return options, errors.New("submit 不支持已有容器；请使用 --image IMAGE 创建一次性容器")
+			return options, errors.New("submit 不使用 --container；新容器请在 -- 后运行 neubox docker run，已有停止容器请在脚本里使用 neubox docker start")
 		case "--image":
 			raw, err := optionValue(args, &index)
 			if err != nil {
@@ -158,11 +175,14 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 		}
 	}
 
-	if strings.TrimSpace(options.command) == "" {
-		return options, errors.New("submit 缺少命令；请在 -- 后指定命令")
+	if options.scriptPath == "" && len(options.commandArgv) == 0 && strings.TrimSpace(options.command) == "" {
+		return options, errors.New("submit 缺少命令；请在 -- 后指定命令，或使用 --script FILE|-")
 	}
 	if options.image == "" && (options.containerUser != "" || len(options.mounts) > 0 || options.project || options.output != "") {
 		return options, errors.New("--container-user/--mount/--project/--output 必须配合 --image")
+	}
+	if options.image != "" && options.scriptPath != "" {
+		return options, errors.New("--script 仅用于宿主机任务；容器任务请在脚本中使用 neubox docker run")
 	}
 	if err := validateResourceOptions(&options.resourceOptions); err != nil {
 		return options, err
@@ -171,9 +191,6 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 }
 
 func joinCommandArguments(arguments []string) string {
-	if len(arguments) == 1 {
-		return arguments[0]
-	}
 	quoted := make([]string, 0, len(arguments))
 	for _, argument := range arguments {
 		quoted = append(quoted, quoteCommandArgument(argument))
@@ -200,21 +217,53 @@ func (a *app) submitCommand(options submitOptions) int {
 	if options.wait && a.jsonOutput {
 		return a.usageError("submit --wait 会连续输出日志，不支持 --json")
 	}
+	var script string
+	if options.scriptPath != "" {
+		var raw []byte
+		var err error
+		if options.scriptPath == "-" {
+			input := a.in
+			if input == nil {
+				input = os.Stdin
+			}
+			raw, err = io.ReadAll(input)
+		} else {
+			raw, err = a.readFile(options.scriptPath)
+		}
+		if err != nil {
+			return a.usageError(fmt.Sprintf("读取脚本 %s 失败: %v", options.scriptPath, err))
+		}
+		if !utf8.Valid(raw) || strings.ContainsRune(string(raw), '\x00') {
+			return a.usageError("脚本必须是 UTF-8 文本，不能包含 NUL 字节")
+		}
+		script = string(raw)
+		if strings.TrimSpace(script) == "" {
+			return a.usageError("脚本不能为空")
+		}
+	}
 	workingDirectory, err := a.getwd()
 	if err != nil {
 		return a.usageError(fmt.Sprintf("无法读取当前工作目录: %v", err))
 	}
 	payload := commandRequest{
-		UserID:    a.config.username,
-		Command:   options.command,
-		DeviceNum: options.deviceNum,
-		DeviceIDs: options.deviceIDs,
-		CPU:       options.cpu,
-		Memory:    options.memory,
-		MemUnit:   "GB",
-		Priority:  options.priority,
+		UserID:      a.config.username,
+		Command:     options.command,
+		CommandArgv: append([]string(nil), options.commandArgv...),
+		Script:      script,
+		DeviceNum:   options.deviceNum,
+		DeviceIDs:   options.deviceIDs,
+		CPU:         options.cpu,
+		Memory:      options.memory,
+		MemUnit:     "GB",
+		Priority:    options.priority,
 	}
 	if options.image != "" {
+		// The old image executor still accepts a Docker command string. New
+		// host submissions keep argv intact in command_argv.
+		if len(options.commandArgv) > 0 {
+			payload.Command = joinCommandArguments(options.commandArgv)
+			payload.CommandArgv = nil
+		}
 		mounts, workdir, err := a.dockerSubmitMounts(options, workingDirectory)
 		if err != nil {
 			return a.usageError(err.Error())
@@ -292,7 +341,14 @@ func (a *app) submitCommand(options submitOptions) int {
 			fields = append(fields, outputField{"workdir", *payload.Target.Workdir})
 		}
 	}
-	fields = append(fields, outputField{"command", options.command})
+	switch {
+	case options.scriptPath != "":
+		fields = append(fields, outputField{"script", options.scriptPath})
+	case len(options.commandArgv) > 0:
+		fields = append(fields, outputField{"command", joinCommandArguments(options.commandArgv)})
+	default:
+		fields = append(fields, outputField{"command", options.command})
+	}
 	printFields(a.out, fields...)
 	if options.wait {
 		return a.runWait([]string{response.TaskID})

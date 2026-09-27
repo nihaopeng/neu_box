@@ -49,6 +49,12 @@ class _DB:
     def get_container(self, mount_namespace):
         return self.containers.get(int(mount_namespace))
 
+    def list_containers(self):
+        return list(self.containers.values())
+
+    def delete_container(self, mount_namespace):
+        self.containers.pop(int(mount_namespace), None)
+
     def activate_sandbox(self, name, pids):
         """对齐 ``storage.activate_sandbox``：只有 CREATING 那一行能改。"""
         self.activations.append((name, list(pids)))
@@ -66,6 +72,11 @@ def _manager(sandboxes=None, containers=None):
     manager.db = _DB(sandboxes=sandboxes, containers=containers)
     manager.lock = threading.RLock()
     manager._container_registration_lock = threading.RLock()
+    manager.unbound = []
+    manager.unbind_container = lambda namespace: manager.unbound.append(namespace)
+    manager._close_container_handles = lambda _namespace: None
+    manager._container_alive = lambda _record: False
+    manager._container_fds = {}
 
     def register_container(sandbox_name, identity):
         record = {
@@ -75,6 +86,7 @@ def _manager(sandboxes=None, containers=None):
             'init_host_pid': identity.init_host_pid,
             'init_start_time': identity.init_start_time,
             'mount_namespace': identity.mount_namespace,
+            'state': 'ACTIVE',
         }
         manager.db.containers[int(identity.mount_namespace)] = record
         return record
@@ -225,6 +237,33 @@ def test_release_container_expected_identity_does_not_delete_replacement():
         42,
         expected_sandbox_name='sbx_user_1.slice',
         expected_container_id='old-container',
+    )
+
+
+def test_release_container_expected_pid_does_not_unbind_a_newer_run():
+    class DB:
+        def get_container(self, _namespace):
+            return {
+                'mount_namespace': 42,
+                'sandbox_name': SANDBOX,
+                'container_id': 'cid',
+                'init_host_pid': 777,
+                'init_start_time': 1,
+            }
+
+    manager = SbxManager.__new__(SbxManager)
+    manager.db = DB()
+    manager.lock = threading.RLock()
+    manager._container_registration_lock = threading.RLock()
+    manager.unbind_container = lambda _namespace: pytest.fail('unexpected unbind')
+    manager._close_container_handles = lambda _namespace: pytest.fail('unexpected close')
+
+    manager.release_container(
+        42,
+        expected_sandbox_name=SANDBOX,
+        expected_container_id='cid',
+        expected_init_host_pid=123,
+        expected_init_start_time=1,
     )
 
 
@@ -541,6 +580,103 @@ def test_intent_endpoint_records_the_callers_sandbox(
     assert intents.peek(CONTAINER_ID, 'user')['sandbox_name'] == SANDBOX
 
 
+def test_two_cli_processes_cannot_replace_a_pending_start(
+        runtime_http, monkeypatch, intents):
+    other = 'sbx_user_task-2.slice'
+    manager = _manager(sandboxes={**_active_sandbox(),
+                                  other: {'name': other, 'state': 'ACTIVE'}})
+    _install(monkeypatch, manager)
+    monkeypatch.setattr('neu_box.api.containers._verify_pid_owner',
+                        lambda pid, user: True)
+    monkeypatch.setattr('neu_box.api.containers._find_sandbox_for_pid',
+                        lambda pid: SANDBOX if pid == 4242 else other)
+
+    first = _lend_request(runtime_http, pid=4242)
+    second = _lend_request(runtime_http, pid=4343)
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.get_json()['code'] == 'start_intent_busy'
+    assert intents.peek(CONTAINER_ID, 'user')['sandbox_name'] == SANDBOX
+    assert intents.peek(CONTAINER_ID, 'user')['borrower_pid'] == 4242
+
+
+def test_acknowledged_short_run_allows_next_lend_after_unregistration(
+        runtime_http, monkeypatch, intents):
+    manager = _manager(sandboxes=_active_sandbox())
+    _install(monkeypatch, manager)
+    _patch_caller(monkeypatch)
+    query = {'container_id': CONTAINER_ID, 'username': 'user', 'pid': 4242}
+
+    assert _lend_request(runtime_http).status_code == 200
+    claim = intents.claim(CONTAINER_ID, 'user')
+    assert intents.complete(CONTAINER_ID, 'user', claim['sequence'])
+    assert _lend_request(runtime_http, pid=4343).get_json()['code'] == 'start_intent_busy'
+
+    # A second CLI's GET cannot acknowledge the first CLI's consumed result.
+    other_query = dict(query, pid=4343)
+    assert runtime_http.get('/container/intent', query_string=other_query).get_json()['state'] == 'consumed'
+    assert intents.peek(CONTAINER_ID, 'user')['acknowledged_at'] is None
+    assert runtime_http.get('/container/intent', query_string=query).get_json()['state'] == 'consumed'
+    assert intents.peek(CONTAINER_ID, 'user')['acknowledged_at'] is not None
+
+    manager.db.containers[42] = {
+        'container_id': CONTAINER_ID,
+        'mount_namespace': 42,
+        'init_host_pid': 123,
+    }
+    manager._container_alive = lambda _record: True
+    still_running = _lend_request(runtime_http, pid=4343)
+    assert still_running.status_code == 409
+    assert still_running.get_json()['code'] == 'container_still_bound'
+
+    manager.db.delete_container(42)
+    next_run = _lend_request(runtime_http, pid=4343)
+    assert next_run.status_code == 200
+    assert intents.peek(CONTAINER_ID, 'user')['borrower_pid'] == 4343
+
+
+def test_lend_fails_closed_when_old_registration_liveness_is_unknown(
+        runtime_http, monkeypatch, intents):
+    manager = _manager(sandboxes=_active_sandbox(), containers={
+        42: {'container_id': CONTAINER_ID, 'mount_namespace': 42},
+    })
+
+    def unknown(_record):
+        raise OSError('pidfd unavailable')
+
+    manager._container_alive = unknown
+    _install(monkeypatch, manager)
+    _patch_caller(monkeypatch)
+
+    response = _lend_request(runtime_http)
+
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'container_binding_unknown'
+    assert intents.peek(CONTAINER_ID, 'user') is None
+
+
+def test_lend_rejects_unreadable_live_pid_after_worker_restart(
+        runtime_http, monkeypatch, intents):
+    manager = _manager(sandboxes=_active_sandbox(), containers={
+        42: {'container_id': CONTAINER_ID, 'mount_namespace': 42,
+             'init_host_pid': os.getpid(), 'init_start_time': 1},
+    })
+    _install(monkeypatch, manager)
+    _patch_caller(monkeypatch)
+
+    def cannot_read(_pid):
+        raise DockerExecutorError('proc permission denied', 'docker_container_pid_invalid')
+
+    monkeypatch.setattr('neu_box.api.containers.process_start_time', cannot_read)
+
+    response = _lend_request(runtime_http)
+
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'container_binding_unknown'
+    assert intents.peek(CONTAINER_ID, 'user') is None
+
+
 def test_intent_beats_a_stale_annotation(runtime_http, monkeypatch, intents):
     """借条指到的沙盒才是这次 start 该用的那个 —— annotation 已经指向死沙盒。"""
     other = 'sbx_lent_task-7.slice'
@@ -556,36 +692,221 @@ def test_intent_beats_a_stale_annotation(runtime_http, monkeypatch, intents):
     assert manager.db.get_container(9001)['sandbox_name'] == other
     assert intents.peek('cid', 'user')['consumed_at'] is not None
 
-    # 借条是一次性的：第二次登记回到 annotation，那里指向一个不存在的沙盒。
+    # 同一 OCI 运行实例重试，已经消费的借条只能幂等确认原登记。
     again = _register(runtime_http, container_id='cid')
-    assert again.status_code == 404
-    assert again.get_json()['code'] == 'sandbox_not_found'
+    assert again.status_code == 200
+    assert again.get_json()['status'] == 'already_registered'
 
 
 def test_intent_only_lends_to_the_containers_own_owner(
         runtime_http, monkeypatch, intents):
-    """属主对不上就当没有借条：别人的容器借不走我的沙盒。"""
+    """跨属主借条必须阻断旧 annotation，不能回退错绑。"""
     other = 'sbx_lent_task-7.slice'
-    _install(monkeypatch, _manager(sandboxes={**_active_sandbox(other)}))
+    manager = _manager(sandboxes={**_active_sandbox(), **_active_sandbox(other)})
+    _install(monkeypatch, manager, _exploding_identity)
     intents.lend('cid', 'someone-else', other)
 
     response = _register(runtime_http, container_id='cid')
 
-    assert response.status_code == 404
-    assert response.get_json()['code'] == 'sandbox_not_found'
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'start_intent_owner_mismatch'
+    assert manager.db.containers == {}
+    assert intents.peek('cid', 'someone-else')['consumed_at'] is None
 
 
-def test_intent_endpoint_falls_back_to_the_annotation(
+def test_intent_endpoint_rejects_a_stale_lent_sandbox(
         runtime_http, monkeypatch, intents):
-    """借条里的沙盒已经没了：不硬绑，退回 annotation（这里是活的）。"""
+    """借条里的沙盒已经没了：不能静默绑定到旧 annotation。"""
     _install(monkeypatch, _manager(sandboxes=_active_sandbox()), _identity())
     _patch_caller(monkeypatch, sandbox='sbx_lent_task-7.slice')
     intents.lend('cid', 'user', 'sbx_lent_task-7.slice')
 
     response = _register(runtime_http, container_id='cid')
 
-    assert response.status_code == 201
-    assert response.get_json()['sandbox_name'] == SANDBOX
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'sandbox_not_active'
+    assert intents.peek('cid', 'user')['consumed_at'] is None
+
+
+def test_intent_is_not_confirmed_when_registration_fails(
+        runtime_http, monkeypatch, intents):
+    """身份检查失败后可重试同一借条，不会误报 consumed。"""
+    calls = 0
+
+    def identity_after_retry(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise DockerExecutorError('容器身份无效', 'docker_container_pid_invalid')
+        return _identity()
+
+    _install(monkeypatch, _manager(sandboxes=_active_sandbox()), identity_after_retry)
+    intents.lend('cid', 'user', SANDBOX)
+
+    response = _register(runtime_http, container_id='cid')
+
+    assert response.status_code == 409
+    entry = intents.peek('cid', 'user')
+    assert entry['claimed_at'] is None
+    assert entry['consumed_at'] is None
+    assert _register(runtime_http, container_id='cid').status_code == 201
+    assert intents.peek('cid', 'user')['consumed_at'] is not None
+
+
+def test_expired_and_replaced_intent_rolls_back_only_this_new_registration(
+        runtime_http, monkeypatch, intents):
+    other = 'sbx_user_task-2.slice'
+    manager = _manager(sandboxes={**_active_sandbox(),
+                                  other: {'name': other, 'state': 'ACTIVE'}})
+    _install(monkeypatch, manager, _identity())
+    clock = [100.0]
+    intents._clock = lambda: clock[0]
+    intents._ttl = 1
+    intents.lend('cid', 'user', SANDBOX)
+    register = manager.register_container
+
+    def register_then_replace(name, identity):
+        record = register(name, identity)
+        clock[0] += 2
+        assert intents.lend('cid', 'user', other) is not None
+        return record
+
+    manager.register_container = register_then_replace
+
+    response = _register(runtime_http, container_id='cid')
+
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'start_intent_changed'
+    assert manager.db.get_container(42) is None
+    assert manager.unbound == [42]
+    assert intents.peek('cid', 'user')['sandbox_name'] == other
+    assert intents.peek('cid', 'user')['claimed_at'] is None
+
+    manager.register_container = register
+    retry = _register(runtime_http, container_id='cid')
+    assert retry.status_code == 201
+    assert retry.get_json()['sandbox_name'] == other
+
+
+def test_expired_intent_rolls_back_new_registration(
+        runtime_http, monkeypatch):
+    clock = [100.0]
+    store = StartIntentStore(ttl_seconds=1, clock=lambda: clock[0])
+    monkeypatch.setattr(StartIntentStore, 'get_instance',
+                        classmethod(lambda cls: store))
+    manager = _manager(sandboxes=_active_sandbox())
+    _install(monkeypatch, manager, _identity())
+    store.lend('cid', 'user', SANDBOX)
+    register = manager.register_container
+
+    def register_then_expire(name, identity):
+        record = register(name, identity)
+        clock[0] += 2
+        return record
+
+    manager.register_container = register_then_expire
+
+    response = _register(runtime_http, container_id='cid')
+
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'start_intent_changed'
+    assert manager.db.get_container(42) is None
+    assert manager.unbound == [42]
+
+
+def test_changed_intent_never_revokes_an_existing_registration(
+        runtime_http, monkeypatch, intents):
+    existing = {
+        'sandbox_name': SANDBOX,
+        'container_id': 'cid',
+        'mount_namespace': 42,
+        'init_host_pid': 123,
+        'init_start_time': 1,
+        'state': 'ACTIVE',
+    }
+    manager = _manager(sandboxes=_active_sandbox(), containers={42: existing})
+    _install(monkeypatch, manager, _identity())
+    clock = [100.0]
+    intents._clock = lambda: clock[0]
+    intents._ttl = 1
+    intents.lend('cid', 'user', SANDBOX)
+    register = manager.register_runtime_container
+
+    def repeat_then_replace(name, identity):
+        result = register(name, identity)
+        clock[0] += 2
+        assert intents.lend('cid', 'user', 'sbx_user_task-2.slice') is not None
+        return result
+
+    manager.register_runtime_container = repeat_then_replace
+
+    response = _register(runtime_http, container_id='cid')
+
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'start_intent_changed'
+    assert manager.db.get_container(42) is existing
+    assert manager.unbound == []
+
+
+def test_rollback_does_not_unbind_a_replacement_identity(
+        runtime_http, monkeypatch, intents):
+    manager = _manager(sandboxes=_active_sandbox())
+    _install(monkeypatch, manager, _identity())
+    intents.lend('cid', 'user', SANDBOX)
+    complete = intents.complete
+    replacement = {
+        'sandbox_name': SANDBOX,
+        'container_id': 'different-container',
+        'mount_namespace': 42,
+        'init_host_pid': 777,
+        'init_start_time': 999,
+        'state': 'ACTIVE',
+    }
+
+    def replace_before_rollback(*args):
+        manager.db.containers[42] = replacement
+        return False
+
+    monkeypatch.setattr(intents, 'complete', replace_before_rollback)
+
+    response = _register(runtime_http, container_id='cid')
+
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'start_intent_changed'
+    assert manager.db.get_container(42) is replacement
+    assert manager.unbound == []
+    monkeypatch.setattr(intents, 'complete', complete)
+
+
+def test_busy_intent_blocks_annotation_fallback_then_allows_retry(
+        runtime_http, monkeypatch, intents):
+    manager = _manager(sandboxes=_active_sandbox())
+    _install(monkeypatch, manager, _identity())
+    intents.lend('cid', 'user', SANDBOX)
+    claim = intents.claim('cid', 'user')
+
+    busy = _register(runtime_http, container_id='cid')
+
+    assert busy.status_code == 409
+    assert busy.get_json()['code'] == 'start_intent_busy'
+    assert manager.db.containers == {}
+    assert intents.abort('cid', 'user', claim['sequence'])
+    assert _register(runtime_http, container_id='cid').status_code == 201
+
+
+def test_consumed_intent_rejects_a_different_container_run(
+        runtime_http, monkeypatch, intents):
+    manager = _manager(sandboxes=_active_sandbox())
+    _install(monkeypatch, manager, _identity())
+    intents.lend('cid', 'user', SANDBOX)
+    assert _register(runtime_http, container_id='cid').status_code == 201
+
+    _install(monkeypatch, manager, _identity(host_pid=777))
+    retry = _register(runtime_http, container_id='cid', host_pid=777)
+
+    assert retry.status_code == 409
+    assert retry.get_json()['code'] == 'start_intent_changed'
+    assert manager.db.get_container(42)['init_host_pid'] == 123
 
 
 def test_intent_state_endpoint_reports_consumption(
@@ -602,7 +923,10 @@ def test_intent_state_endpoint_reports_consumption(
     pending = runtime_http.get('/container/intent', query_string=query)
     assert pending.get_json()['state'] == 'pending'
 
-    intents.take(CONTAINER_ID, 'user')
+    claim = intents.claim(CONTAINER_ID, 'user')
+    still_pending = runtime_http.get('/container/intent', query_string=query)
+    assert still_pending.get_json()['state'] == 'pending'
+    assert intents.complete(CONTAINER_ID, 'user', claim['sequence'])
     consumed = runtime_http.get('/container/intent', query_string=query)
     assert consumed.get_json()['state'] == 'consumed'
     assert consumed.get_json()['sandbox_name'] == SANDBOX

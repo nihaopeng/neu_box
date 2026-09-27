@@ -59,10 +59,16 @@ mount namespace 是主键，同时是 BPF `container_owner` map 的 key；
 终端）原本在哪个 cgroup，release 时据此把它们还回去；没有记录的进程是沙盒里
 长出来的，随沙盒一起收掉。
 
-必须解析 JSON 或执行复杂数据转换时，可以使用 Python（例如未来的 `0008`）：
+`0007_create_sessions.sql` 增加终端申请会话记录。
+
+`0008_add_task_command_modes.sql` 给任务增加 `command_mode` 与 `command_argv`，
+使排队中的脚本原文和参数数组在 Worker 重启后仍按原形式执行；既有任务默认为
+`command` 模式。升级前必须显式运行 `db migrate`，不能直接启动新 Worker。
+
+必须解析 JSON 或执行复杂数据转换时，可以使用 Python（以下为示意文件名）：
 
 ```text
-0008_normalize_task_target.py
+00NN_normalize_task_target.py
 ```
 
 ```python

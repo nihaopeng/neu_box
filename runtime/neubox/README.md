@@ -9,7 +9,7 @@
 | 二进制 | 干什么 |
 |---|---|
 | `neu-box-runtime` | runc wrapper，占 Docker `default-runtime` 的位置：给带 annotation 的容器注入 hook，其余 argv 原样转发给真 runc |
-| `neu-box-hook` | OCI hook：在容器 ENTRYPOINT 之前向 Worker 登记；Worker 明确确认沙盒不存在或正在销毁时允许容器以零卡启动，其他失败则拒绝启动 |
+| `neu-box-hook` | OCI hook：在容器 ENTRYPOINT 之前向 Worker 登记；登记失败或 Worker 不可达时拒绝受管容器启动 |
 | `neu-box-config` | 生成/迁移 `/etc/neu-box/runtime.env` |
 
 行为契约、hook phase 验证记录、边界 → [`docs/runtime-hook.md`](docs/runtime-hook.md)

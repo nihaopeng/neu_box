@@ -145,8 +145,8 @@ func TestRunPrefersStateAnnotations(t *testing.T) {
 	}
 }
 
-// 授权的否定答案：Worker 明确说沙盒不存在 / 正在销毁 → 放行，但容器零卡。
-func TestRunAllowsStartWithoutAuthorization(t *testing.T) {
+// 已声明受管的容器不能在没有预期授权的情况下运行。
+func TestRunRejectsStartWithoutAuthorization(t *testing.T) {
 	cases := []struct {
 		name   string
 		status int
@@ -172,15 +172,14 @@ func TestRunAllowsStartWithoutAuthorization(t *testing.T) {
 				"annotations": map[string]string{"sandbox_cgroup": "sbx_a"},
 			})
 			var stderr strings.Builder
-			if code := run(strings.NewReader(state), testConfig(server.URL), &stderr); code != 0 {
-				t.Fatalf("该退 0（无授权放行），实际退 %d：%s", code, stderr.String())
+			if code := run(strings.NewReader(state), testConfig(server.URL), &stderr); code == 0 {
+				t.Fatalf("必须拒绝无授权启动：%s", stderr.String())
 			}
 			if received() == nil {
 				t.Fatal("请求没发出去")
 			}
-			// 警告必须点明"没有卡"，这是这条路唯一的观测点。
-			if !strings.Contains(stderr.String(), "无授权") {
-				t.Fatalf("stderr 没说明容器无授权：%s", stderr.String())
+			if !strings.Contains(stderr.String(), "登记容器") {
+				t.Fatalf("stderr 没说明登记失败：%s", stderr.String())
 			}
 			if !strings.Contains(stderr.String(), tc.code) {
 				t.Fatalf("stderr 没带上 Worker 的业务码 %s：%s", tc.code, stderr.String())
@@ -190,7 +189,7 @@ func TestRunAllowsStartWithoutAuthorization(t *testing.T) {
 }
 
 func TestRunFailsOnWorkerRejection(t *testing.T) {
-	// 拿不到答案 / 身份有问题的非 2xx 一律不放行（404/409 那两种见上一条用例）。
+	// 拿不到答案 / 身份有问题的非 2xx 一律不放行。
 	cases := []struct {
 		status int
 		body   string

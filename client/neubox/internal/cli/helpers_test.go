@@ -37,6 +37,9 @@ func testApplication(serverURL string) (*app, *bytes.Buffer, *bytes.Buffer) {
 		runFn: func(string, []string, []string) (int, error) {
 			return 0, errors.New("测试不该直接跑 docker start")
 		},
+		startFn: func(string, []string, []string) (StartedCommand, error) {
+			return nil, errors.New("测试不该直接启动 docker start -a")
+		},
 	}
 	return application, out, errOut
 }

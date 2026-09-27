@@ -42,14 +42,14 @@ docker run --annotation sandbox_cgroup=<name> ...      ← 客户端 / 用户
                               │
                      POST /container/register           ← Worker 从这里开始
                               │
-        ┌─────────────────────┼─────────────────────┐
-     2xx / 200          404 sandbox_not_found    其它 4xx / 5xx / 超时 / 连不上
-        │              409 sandbox_not_active          │
-   hook 退 0            hook 退 0（打警告）          hook 退非 0
-   登记完成          容器无授权启动（0 张卡）              │
-        │                  │                             ▼
-        ▼                  ▼                 runc create 失败，容器不启动
-    ENTRYPOINT 执行    ENTRYPOINT 执行
+        ┌─────────────────────┴─────────────────────┐
+     2xx / 200                 其它结果（包括沙盒不存在或正在销毁）
+        │                                         │
+   hook 退 0                               hook 退非 0
+   登记完成                         runc create 失败，容器不启动
+        │
+        ▼
+    ENTRYPOINT 执行
 ```
 
 **Worker 是唯一写 BPF map 和数据库的人。** runtime 和 hook 不碰 BPF，只负责把
@@ -83,8 +83,8 @@ annotation 是**传输通道，不是凭证**。真正的校验在 Worker 侧 �
 
 annotation 是**建容器时**写死的，而 `docker start` 既不接受 `--annotation`，也
 看不到是谁在调它（启动是 dockerd 干的活）。容器配置本身也只有停掉 dockerd 才能
-改写 —— 这条路不能走。于是沙盒一 release，老容器再 start 就只剩"起得来但零卡"：
-可写层还在，卡拿不到，而用户想要的往往只是"接着用同一个容器"。
+改写 —— 这条路不能走。沙盒一 release，老容器的可写层仍在，但原生
+`docker start` 无法从旧 annotation 获得设备授权；runtime 会拒绝这次启动。
 
 `neubox docker start` 用**两段式借条**补这个洞，hook 一行都不用改：
 
@@ -99,7 +99,7 @@ neubox docker start <容器>
         │        └─ hook 照旧 POST /container/register（它不知道有借条）
         │               └─ Worker：这个 container_id 有借条 → 按借条登记
         │
-        └─ ④ GET /container/intent 确认认领结果；没认领就明说零卡
+        └─ ④ GET /container/intent 确认认领结果；没认领就报错
 ```
 
 谁能借、借给谁，都在第 ② 步定死，没有任何"猜"的成分：
@@ -114,23 +114,37 @@ neubox docker start <容器>
 
 借条按 `(container_id, 属主)` 存，**一次性**，10 秒过期。register 认领时还要再对
 一次属主：annotation 里的属主必须等于借条的属主 —— 别人的容器借不走你的沙盒。
-三个 shell 各持一个沙盒时，在哪个 shell 敲就借哪个沙盒，互不影响；同一个容器被
-两次 start 抢，属主对不上的那张借条直接不参与匹配（结果零卡，不会串到别人头上）。
+同一容器若有其他属主尚未确认的有效借条，hook 返回 `409 start_intent_owner_mismatch`，
+不得回退到旧 annotation 登记。已确认的旧借条不阻止新属主启动。
+同一个容器已有待启动、登记中，或已登记但原 CLI 尚未查询确认的借条时，再次
+申请返回 `409 start_intent_busy`，不会覆盖前一张借条；即使申请来自另一用户名也
+会拒绝。原 CLI 查询到 `consumed` 后，Worker 将这次结果标为已确认。容器退出、
+登记注销后即可再次申请；运行中的登记返回 `409 container_still_bound`，旧登记
+是否还活着无法确认时返回 `409 container_binding_unknown`。这些检查只读 Worker
+自身的登记与 pidfd／进程身份，不在借条端点查询 Docker。
 
-**借不上不是错误，只是没卡。** 借条存不上、或者存上了但没被认领（过期、没走
-hook），`neubox docker start` 都照常把容器拉起来，只在命令行上说明"看不到 NPU"。
-和原生 `docker start` 的行为一致：能不能起来和有没有卡是两件事，后者永远靠 Worker
-明说，不靠退出码。
+三个 shell 各持一个沙盒时，在哪个 shell 敲就借哪个沙盒；同一容器的并发 start
+需要按上述规则串行。启动失败而没有完成确认的借条最多占位 10 秒；当前 CLI 没有
+取消借条接口，新的 CLI 应等借条过期再安全重试。未得到本次预期授权的受管启动
+必须失败，不允许容器带着零卡继续执行用户程序。
+
+`neubox docker start` 的借条申请、启动和认领确认都要成功；失败应返回非零。
+runtime hook 对 Worker 的任何非 2xx 响应都返回失败，阻止容器启动。
 
 已知边界，别当成 bug：
 
 * **借条和 start 之间只能靠 `(container_id, 时间窗)` 关联。** docker 没给更强的
   通道（start 不带 annotation、不带 env、不带 nonce，daemon 也不告诉 Worker 是
-  谁发起的），所以窗口存在。最坏结果是"零卡"或"同一用户自己的几个沙盒之间串号"，
-  拿不到别人的卡 —— 三道属主校验都在拿卡之前。
+  谁发起的），所以窗口存在。Worker 拒绝并发借条，仍不能识别一个迟到的 OCI
+  hook 究竟来自哪次 Docker start；调用方确认绑定时仍须检查本次沙盒，不能把
+  另一次启动的结果当成功。
+* **借条只保存在 Worker 进程内。** 如果 Worker 恰好在借条发出后、hook 登记前
+  重启，借条会丢失；旧 annotation 指向的沙盒仍可用时，hook 可能按旧授权登记。
+  CLI 的确认会发现本次借条丢失并尝试停止容器，但这不能保证容器业务程序从未
+  短暂运行。要消除此窗口，需要持久化借条或增加 Docker 启动实例标识。
 * **不经过 wrapper 的启动拿不到借条**：原生 `docker start`、`docker restart`、
   `--restart=always`、daemon 重启后的 live-restore 都是如此。annotation 还指着
-  活沙盒就照旧能用；沙盒已经没了就是零卡。
+  活沙盒时仍可能沿用旧授权；沙盒已经没了时，runtime 拒绝受管容器启动。
 
 `neubox docker restart` 面向正在运行的受管容器：先确认 annotation 与 Worker
 可用，再 `docker stop` 并等待旧 mount namespace 的登记撤销，随后存借条并
@@ -144,14 +158,10 @@ hook），`neubox docker start` 都照常把容器拉起来，只在命令行上
 OCI runtime hook 是唯一能卡在这个窗口里的点（Docker 的 create 路径里，
 ENTRYPOINT 还没跑）。
 
-这也是"**拿不到授权答案就绝不放行**"的全部理由：放行 = 容器带着一张空 UDA 表
-永久坏掉，而用户还以为"驱动装了没生效"。所以 Worker 明确回答"没有这个沙盒 /
-正在销毁"以外的任何失败，路径只能是 hook 退非 0、`runc create` 失败。
-
-唯一的例外是**授权的否定答案**（404 `sandbox_not_found` / 409
-`sandbox_not_active`）：沙盒已经 release 掉、用户又 `docker start` 那个老容器时，
-hook 放行 —— 容器起来（可写层还在），但一张卡都拿不到（BPF 查不到委托，驱动给
-它建的 UDA 表是空的）。这条路的判断与后果见 `runtime/neubox/docs/runtime-hook.md`
+这也是"**拿不到授权答案就绝不放行**"的理由：放行 = 容器带着一张空 UDA 表
+永久坏掉，而用户还以为"驱动装了没生效"。Worker 明确回答"没有这个沙盒 /
+正在销毁"时也必须让 hook 退非 0，阻止 `runc create`，要求用户重新取得沙盒
+并通过 `neubox docker start` 绑定。详见 `runtime/neubox/docs/runtime-hook.md`
 与 [`isolation.md`](isolation.md)。
 
 ## Worker 侧必须做到的四条

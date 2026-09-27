@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import shlex
 import sqlite3
 
 from flask import Blueprint, request
@@ -46,10 +47,33 @@ def _parse_int(value: str | None, default: int) -> int:
 @command_bp.route('', methods=['POST'])
 def create_task():
     body = request.get_json(silent=True) or {}
-    command = (body.get('command') or '').strip()
+    if not isinstance(body, dict):
+        return {'error': '请求体必须是 JSON 对象'}, 400
+    forms = [name for name in ('command', 'command_argv', 'script') if name in body]
+    if len(forms) != 1:
+        return {'error': '必须且只能提供 command、command_argv 或 script 之一'}, 400
+    form = forms[0]
+    command_argv = None
+    if form == 'command_argv':
+        command_argv = body['command_argv']
+        if (not isinstance(command_argv, list) or not command_argv
+                or any(not isinstance(arg, str) or '\x00' in arg
+                       for arg in command_argv)
+                or not command_argv[0]):
+            return {'error': 'command_argv 必须是非空字符串参数数组'}, 400
+        command = shlex.join(command_argv)
+        command_mode = 'argv'
+    else:
+        command = body[form]
+        if not isinstance(command, str) or '\x00' in command or not command.strip():
+            return {'error': f'{form} 必须是非空字符串'}, 400
+        # Preserve every byte of a script's text, including indentation,
+        # trailing newlines and heredoc delimiters. Legacy commands retain
+        # the historical trimming behavior.
+        command_mode = form
+        if form == 'command':
+            command = command.strip()
     user_id = (body.get('user_id') or '').strip()
-    if not command:
-        return {'error': '命令不能为空'}, 400
     if not user_id:
         return {'error': 'user_id 不能为空'}, 400
     try:
@@ -91,6 +115,8 @@ def create_task():
         return {'error': f"Host 工作目录不存在或不是目录: {target['workdir']}"}, 400
     if target['type'] == TARGET_DOCKER and not (normalized_ids or device_num > 0):
         return {'error': 'docker 目标必须通过 device_ids 或 device_num 申请至少一张设备'}, 400
+    if form != 'command' and target['type'] == TARGET_DOCKER:
+        return {'error': 'script 和 command_argv 需要 host 目标；容器请通过 neubox docker 命令启动'}, 400
     est_time = body.get('est_time', 0)
     if not isinstance(est_time, int) or est_time < 0:
         est_time = 0
@@ -99,6 +125,7 @@ def create_task():
             user_id, command, cpu, mem,
             0 if normalized_ids else device_num,
             normalized_ids, target, est_time, body.get('priority', 0),
+            command_mode=command_mode, command_argv=command_argv,
         )
     except SandboxAllocationPaused as exc:
         return {'error': str(exc), 'code': 'worker_paused'}, 503

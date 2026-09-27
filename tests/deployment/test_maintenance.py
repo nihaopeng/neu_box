@@ -141,8 +141,8 @@ def test_restart_recovers_state(basic):
 def test_worker_down_blocks_annotated_container(container, container_image):
     """36 · Worker 停掉 → 容器起不来。
 
-    口径：只有 Worker 明确回答"沙盒不存在 / 正在销毁"才无授权放行（35、83）；
-    连不上属于"拿不到答案"，必须继续挡住。
+    口径：Worker 返回拒绝（35、83）或无法连接时，hook 都必须阻止
+    带受管 annotation 的容器启动。
 
     停服用 ``stop_worker()``（SIGTERM MainPID，和 ``pause`` 停服做的事一样；
     ``systemctl stop`` 被单元的 ``RefuseManualStop=yes`` 拒绝），恢复用

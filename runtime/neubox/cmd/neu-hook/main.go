@@ -4,9 +4,8 @@
 // neu-box-runtime 的包注释），从 stdin 喂一份 OCI state。它取出容器 init 的
 // 宿主机 PID 和 sandbox_cgroup，POST 给 Worker 的 /container/register。
 //
-// 唯一允许"登记不上还放行"的情况：Worker 明确回答"没有这个沙盒 / 正在销毁"
-// （404 sandbox_not_found / 409 sandbox_not_active）。那时容器起来但零卡（BPF
-// 查不到委托）。其余失败一律退非 0 —— 详见 docs/runtime-hook.md。
+// Worker 拒绝登记或不可达时一律退非 0，阻止已声明受管的容器在没有预期
+// 设备授权的情况下运行。详见 docs/runtime-hook.md。
 //
 // 它是 runc 拉起来的，不是交互终端：日志一律走 stderr。
 package main
@@ -72,28 +71,11 @@ type registerRequest struct {
 	SandboxCgroup string `json:"sandbox_cgroup"`
 }
 
-// registerOutcome 是登记请求结果里"能用来做判断"的那部分。
-//
-// status 为 0 表示压根没拿到响应（连不上、超时、构造失败…）。code 是 Worker
-// 错误体里的业务码 —— 只有它明确说"沙盒不存在 / 正在销毁"时，hook 才允许放行。
+// registerOutcome 保存 Worker 响应的状态和业务码，供调用方诊断失败。
+// status 为 0 表示压根没拿到响应（连不上、超时、构造失败…）。
 type registerOutcome struct {
 	status int
 	code   string
-}
-
-// unregisteredAllowed 判断这次拒绝是不是"授权的否定答案"。
-//
-// 只认 Worker 给的业务码：代理/网关也可能还个 404，那属于"拿不到答案"，按失败处理。
-func (outcome registerOutcome) unregisteredAllowed() bool {
-	if outcome.status != http.StatusNotFound &&
-		outcome.status != http.StatusConflict {
-		return false
-	}
-	switch outcome.code {
-	case "sandbox_not_found", "sandbox_not_active":
-		return true
-	}
-	return false
 }
 
 func main() {
@@ -126,16 +108,8 @@ func run(stdin io.Reader, cfg config.Config, stderr io.Writer) int {
 		HostPID:       state.Pid,
 		SandboxCgroup: sandbox,
 	}
-	outcome, err := register(cfg.WorkerURL, body, httpTimeout)
+	_, err = register(cfg.WorkerURL, body, httpTimeout)
 	if err != nil {
-		if outcome.unregisteredAllowed() {
-			// 放行但无授权。这行日志是这条路唯一的观测点（只在 dockerd 日志里）。
-			logf(stderr,
-				"沙盒 %s 已不存在或正在销毁（%s）—— 容器 %s 以**无授权**方式启动："+
-					"容器内看不到任何 NPU。要卡请重新 acquire，并重建容器",
-				sandbox, outcome.code, state.ID)
-			return 0
-		}
 		logf(stderr, "登记容器 %s（沙盒 %s）失败：%v", state.ID, sandbox, err)
 		return 1
 	}

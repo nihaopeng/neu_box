@@ -144,34 +144,23 @@ def test_container_without_annotation_gets_no_device(
     single_card.remove_container(reference)
 
 
-def test_annotation_pointing_at_unknown_sandbox_starts_without_cards(
+def test_annotation_pointing_at_unknown_sandbox_is_rejected(
         container, container_image):
-    """35 · annotation 指向不存在的沙盒 → 容器起得来，但一张卡都没有。
-
-    Worker 明确回答"没有这个沙盒"时 hook 无授权放行（可写层还在）；连不上 Worker
-    仍然起不来，那条边界见 36。
-    """
+    """35 · annotation 指向不存在的沙盒 → hook 拒绝启动业务进程。"""
     missing = f"sbx_{container.user}_{secrets.token_hex(6)}.slice"
-    node = container.device_node(container.require_idle(1)[0])
     reference, result = run_container(
         container, container_image, annotation=missing,
-        command=container_probe_command(node),
+        command='echo should-not-run',
     )
-    assert result.returncode == 0, (
-        f"annotation 指向不存在的沙盒 {missing} 时容器没起来；Worker 已经明确回答"
-        f"「没有这个沙盒」，hook 应当无授权放行:\n{(result.stdout or '')[:2000]}"
+    assert result.returncode != 0, (
+        f"annotation 指向不存在的沙盒 {missing} 时容器竟然启动成功:"
+        f"\n{(result.stdout or '')[:2000]}"
     )
-    text = wait_container_log_count(
-        container, reference, CONTAINER_PROBE_MARKER, 1)
-    assert CONTAINER_OPEN_OK not in text, (
-        f"沙盒 {missing} 根本不存在，容器里却打开了 {node} —— 无授权启动必须是"
-        f"零卡：BPF 查不到委托就该拒:\n{text[:2000]}"
-    )
-    # 账号上也不该有登记。
-    container_id = container.container_id_of(reference)
-    status = container.sandbox_of_container(container_id)
-    assert status.status == 200, status.text
-    assert status.json().get("sandbox_name") is None, status.text[:500]
+    created = container.docker("inspect", "--format", "{{.Id}}", reference)
+    if created.returncode == 0:
+        status = container.sandbox_of_container(created.stdout.strip())
+        assert status.status == 200, status.text
+        assert status.json().get("sandbox_name") is None, status.text[:500]
     container.remove_container(reference)
 
 

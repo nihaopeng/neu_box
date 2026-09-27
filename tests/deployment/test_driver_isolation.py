@@ -495,19 +495,20 @@ def test_unregistered_container_sees_no_cards(
     )
 
 
-def test_stale_annotation_starts_container_without_cards(
+def test_stale_annotation_cannot_start_driver_workload(
         driver_isolation, single_card, container_image):
-    """83 · annotation 指向的沙盒已经不存在：容器起得来，但驱动表是 0 张。
-
-    35 验的是用户态"open 被拒"，这条读驱动自己的账。
-    """
+    """83 · 旧 annotation 指向已删除沙盒时，驱动工作负载不得启动。"""
     missing = f"sbx_{single_card.user}_{secrets.token_hex(6)}.slice"
-    reference = _start_probe_container(
-        single_card, container_image, annotation=missing)
-    row = _wait_row(_container_pid(reference))
-    assert row['dev_num'] == 0 and row['udevids'] == [], (
-        f"沙盒 {missing} 根本不存在，容器的 UDA 表里却出现了 {row['dev_num']} 张卡"
-        f"（udevid={row['udevids']}）—— 无授权启动必须是零卡，整行：{row}"
+    name = f"neu-box-uda-{secrets.token_hex(6)}"
+    single_card.created_containers.append(name)
+    result = single_card.docker_run(
+        "--name", name, "--annotation", f"sandbox_cgroup={missing}",
+        "--entrypoint", "sh", container_image, "-c", _PROBE,
+        detach=True, timeout=180,
+    )
+    assert result.returncode != 0, (
+        f"沙盒 {missing} 不存在，容器仍启动了驱动工作负载:"
+        f"\n{(result.stdout or '')[:2000]}"
     )
 
 

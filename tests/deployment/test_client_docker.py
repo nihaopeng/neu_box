@@ -19,8 +19,8 @@ exec 各条路径。最典型的那条是：
 
 84/85 走的是同一个现场的**另一条出口**：annotation 改不了，但 `neubox docker
 start` 可以把这个 shell 现在的沙盒借给容器（借条，10 秒内有效、一次性），于是
-跨 shell 换沙盒也能接着用同一个容器；不在沙盒里的 `neubox docker start` 会
-启动容器，但明确提示没有借到卡。契约见 `docs/container-registration.md`。
+跨 shell 换沙盒也能接着用同一个容器；不在沙盒里的 `neubox docker start`
+会拒绝启动。契约见 `docs/container-registration.md`。
 
 前置：同一 RPM 安装的 `neubox` 必须存在且版本达标，否则部署验收失败。
 """
@@ -115,19 +115,16 @@ def _assert_open(single_card, reference: str, node: str, *, expect_ok: bool,
         )
 
 
-def _start_expecting_no_cards(single_card, reference: str, node: str,
-                              sandbox: str) -> None:
-    """沙盒已释放的老容器：能 start（可写层还在），但一张卡都用不了。"""
+def _start_expecting_refused(single_card, reference: str, sandbox: str) -> None:
+    """沙盒已释放的受管容器：原生 start 不能在无授权状态运行。"""
     started = single_card.docker("start", reference, timeout=90)
-    assert started.returncode == 0, (
-        f"沙盒 {sandbox} 已释放，`docker start` 应当放行（容器无卡可跑，可写层还"
-        f"在），实际失败：{(started.stdout or '')[:800]}"
+    assert started.returncode != 0, (
+        f"沙盒 {sandbox} 已释放，原生 `docker start` 不得放行受管容器"
     )
-    _assert_open(single_card, reference, node, expect_ok=False,
-                 context=f"沙盒 {sandbox} 已释放，容器是无授权启动的")
+    single_card.wait_container_stopped(reference)
     container_id = single_card.container_id_of(reference)
     assert single_card.sandbox_of_container(container_id).json().get(
-        "sandbox_name") is None, "无授权启动的容器不该有登记"
+        "sandbox_name") is None, "启动失败的容器不该有登记"
 
 
 def _stage_stopped_released_container(single_card, neubox_bin, container_image,
@@ -328,13 +325,13 @@ def test_client_container_stop_then_start_uses_card_again(
     single_card.wait_idle_at_least(baseline)
 
 
-def test_client_release_then_start_runs_without_cards(
+def test_client_release_then_native_start_is_rejected(
         neubox_bin, single_card, container_image):
-    """74 · stop 之后再 release：容器留着（可写层不丢），start 起得来但零卡。
+    """74 · stop 之后再 release：容器留着，原生 start 被拒绝。
 
     release 时 `containers` 表里已经看不到它了（stop 时就注销），而 `neubox
     docker run` 起的容器没有 label，所以它会活过 release；再 start 时 hook 拿到
-    "没有这个沙盒" → 无授权放行。
+    "没有这个沙盒" → 拒绝启动。
     """
     baseline = single_card.idle_devices()
     device = single_card.require_idle(1)[0]
@@ -344,8 +341,8 @@ def test_client_release_then_start_runs_without_cards(
         single_card, neubox_bin, container_image, device, node)
 
     # 容器还在（只是停着）—— 这是"不删容器"的直接回归：可写层没丢。
-    _start_expecting_no_cards(single_card, name, node, sandbox)
-    # 卡已经回池，无授权启动的容器不许把它再占回去。
+    _start_expecting_refused(single_card, name, sandbox)
+    # 卡已经回池，失败的启动不能把它重新占回去。
     single_card.wait_idle_at_least(baseline)
     assert device in single_card.idle_minors(), single_card.idle_minors()
 
@@ -357,7 +354,7 @@ def test_client_released_card_goes_to_next_sandbox(
     """75 · 停着的老容器不会挡住同一张卡交给下一个沙盒。
 
     接 74 的现场：同一张卡用真 neubox 重新 acquire，新容器能开这张卡；老容器
-    start 起来也开不了卡，抢不走。
+    start 被拒绝，不会抢走卡。
     """
     baseline = single_card.idle_devices()
     device = single_card.require_idle(1)[0]
@@ -366,8 +363,8 @@ def test_client_released_card_goes_to_next_sandbox(
     sandbox, old_name, _old_id = _stage_stopped_released_container(
         single_card, neubox_bin, container_image, device, node)
     single_card.wait_container_stopped(old_name)
-    # 先把老容器拉起来：它必须是"活着但没卡"，不能把卡占回去。
-    _start_expecting_no_cards(single_card, old_name, node, sandbox)
+    # 原生启动旧容器必须被拒绝，不能把卡占回去。
+    _start_expecting_refused(single_card, old_name, sandbox)
 
     new_name = f"neu-box-client-{secrets.token_hex(4)}"
     rc, output, new_sandbox = _docker_run_in_sandbox(
@@ -384,9 +381,8 @@ def test_client_released_card_goes_to_next_sandbox(
     _assert_open(single_card, new_name, node, expect_ok=True,
                  context=f"卡 {device} 已经交给新沙盒 {new_sandbox}")
 
-    # 老容器还活着，但依旧开不了卡。
-    _assert_open(single_card, old_name, node, expect_ok=False,
-                 context="老容器是无授权启动的，卡归新沙盒")
+    # 老容器仍然停止，没有从新沙盒借到卡。
+    single_card.wait_container_stopped(old_name)
 
     neubox_cli(neubox_bin, "release", new_sandbox)
     single_card.wait_sandbox_gone(new_sandbox)
@@ -467,13 +463,9 @@ def test_client_docker_start_lends_the_current_sandbox(
     single_card.remove_container(name)
 
 
-def test_client_docker_start_without_a_sandbox_runs_without_cards(
+def test_client_docker_start_without_a_sandbox_is_rejected(
         neubox_bin, single_card, container_image):
-    """85 · 不在沙盒里的 `neubox docker start`：容器照样起来，但一张卡都没有。
-
-    借条借不上（这里根本没有沙盒可借）不该拦住 start —— 用户可能只是想进可写层
-    看看。判据是"起来了 + 没登记 + 开不了卡 + 命令行明说没拿到 NPU"，不是退出码。
-    """
+    """85 · 不在沙盒里借不到卡时，neubox docker start 不启动容器。"""
     caller = single_card.client.sandbox_status(pid=os.getpid()).json()
     if caller.get("sandbox_name"):
         pytest.fail(
@@ -496,21 +488,19 @@ def test_client_docker_start_without_a_sandbox_runs_without_cards(
         capture_output=True, text=True, timeout=120,
     )
     output = f"{result.stdout}\n{result.stderr}"
-    assert result.returncode == 0, (
-        f"借不到沙盒不该拦住 start（沙盒 {sandbox} 已经 release）："
+    assert result.returncode != 0, (
+        f"借不到沙盒时必须拒绝 start（沙盒 {sandbox} 已经 release）："
         f"rc={result.returncode}\n{output[:1000]}"
     )
     running = single_card.docker(
         "inspect", "--format", "{{.State.Running}}", name, timeout=30)
-    assert running.stdout.strip() == "true", (
-        f"容器应当照常起来（零卡），实际 State.Running={running.stdout.strip()!r}"
+    assert running.stdout.strip() == "false", (
+        f"容器应保持停止，实际 State.Running={running.stdout.strip()!r}"
     )
-    _assert_open(single_card, name, node, expect_ok=False,
-                 context="没有沙盒可借，容器应当拿不到卡")
     assert single_card.sandbox_of_container(container_id).json().get(
         "sandbox_name") is None, "没有借条就不该有登记"
-    assert "看不到 NPU" in output, (
-        f"命令行要说清这次没拿到卡：\n{output[:1000]}"
+    assert "沙盒" in output, (
+        f"命令行应说明借卡失败：\n{output[:1000]}"
     )
 
     single_card.wait_idle_at_least(baseline)

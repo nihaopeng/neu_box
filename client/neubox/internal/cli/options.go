@@ -28,6 +28,9 @@ type submitOptions struct {
 	priority      int
 	wait          bool
 	command       string
+	commandSet    bool
+	commandArgv   []string
+	scriptPath    string
 	image         string
 	workdir       string
 	containerUser string

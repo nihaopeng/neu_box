@@ -211,7 +211,7 @@ func (a *app) runDockerRestart(args []string) int {
 	if _, err := a.outputFn(binary, "start", container); err != nil {
 		return a.internalError("docker_start_failed", err)
 	}
-	bound, err := a.waitStartBinding(info.ID)
+	bound, err := a.waitStartBinding(info.ID, sandboxName)
 	if err != nil || !bound {
 		// A failed binding must not leave a supposedly GPU-ready container running.
 		_, stopErr := a.outputFn(binary, "stop", container)

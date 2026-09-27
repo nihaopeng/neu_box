@@ -104,7 +104,7 @@ func TestDockerRestartStopsBeforeLendingAndStartsAfterUnregister(t *testing.T) {
 				}
 				writeJSON(t, writer, http.StatusOK, map[string]any{"sandbox_name": "sbx_yuxd_new.slice"})
 			} else {
-				writeJSON(t, writer, http.StatusOK, map[string]any{"state": "consumed"})
+				writeJSON(t, writer, http.StatusOK, map[string]any{"state": "consumed", "sandbox_name": "sbx_yuxd_new.slice"})
 			}
 		default:
 			t.Errorf("unexpected path: %s", request.URL.Path)

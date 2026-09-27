@@ -217,12 +217,15 @@ class TaskQueue(SchedulerMixin):
     def submit(self, user_id: str, command: str, cpu: int = 0,
                mem: str = '0', device_num: int = 0,
                device_ids: list | None = None, target: dict | None = None,
-               est_time: int = 0, priority: int = 0) -> str:
+               est_time: int = 0, priority: int = 0, *,
+               command_mode: str = 'command',
+               command_argv: list[str] | None = None) -> str:
         if SbxManager.get_instance().allocations_paused():
             raise SandboxAllocationPaused('Worker 处于暂停维护状态，暂不接受新任务')
         task_id = uuid.uuid4().hex[:12]
         task = {
             'task_id': task_id, 'user_id': user_id, 'command': command,
+            'command_mode': command_mode, 'command_argv': command_argv,
             'cpu': cpu, 'mem': mem, 'device_num': device_num,
             'device_ids': list(device_ids or []),
             'target': dict(target or {'type': TARGET_HOST}),
@@ -237,6 +240,7 @@ class TaskQueue(SchedulerMixin):
             self._db.insert_task(
                 task_id, user_id, command, cpu, mem, [], 0, device_num,
                 device_ids or [], task['target'], est_time, priority,
+                command_mode=command_mode, command_argv=command_argv,
             )
             self._enqueue('task', task_id, task, priority)
         self._wake_scheduler()
@@ -467,19 +471,25 @@ class TaskQueue(SchedulerMixin):
         except Exception as exc:
             cleanup_ok = False
             logger.exception('任务 %s 清理 sandbox 失败', task_id)
-        if not cleanup_ok:
-            result = {**(result or {}), 'returncode': -1,
-                      'error': 'sandbox_cleanup_failed'}
         if task.get('_canceled'):
-            result = {**(result or {}), 'returncode': -1,
-                      'timed_out': False, 'error': '用户手动取消'}
+            result = {**(result or {}), 'timed_out': False,
+                      'error': '用户手动取消'}
+        if not cleanup_ok:
+            previous_error = (result or {}).get('error')
+            cleanup_error = 'sandbox_cleanup_failed'
+            result = {
+                **(result or {}),
+                'error': (f'{previous_error}; {cleanup_error}'
+                          if previous_error else cleanup_error),
+            }
         if task.get('_canceled'):
             # 取消是独立终态：以前混在 failed 里靠 error 文案区分，统一队列视图
             # 里有 acquire 的 cancelled，任务这边也用同一个词。
             status = 'cancelled'
         else:
             status = ('completed' if result.get('returncode') == 0
-                      and not result.get('timed_out') else 'failed')
+                      and not result.get('timed_out')
+                      and not result.get('error') else 'failed')
         finished_at = time.time()
         try:
             self._db.update_task_result(

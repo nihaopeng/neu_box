@@ -34,9 +34,11 @@ def sort_key(task: dict) -> tuple:
 def public(task: dict) -> dict:
     """任务对外的表示（HTTP 响应里那一个）。"""
     target = task.get('target') or task.get('target_spec')
-    return {
+    mode = task.get('command_mode') or 'command'
+    item = {
         'task_id': task['task_id'], 'user_id': task['user_id'],
         'command': task['command'], 'status': task['status'],
+        'mode': mode,
         'position': task.get('position', 0),
         'priority': task.get('priority', 0) or 0,
         'cpu': task.get('cpu', 0), 'est_time': task.get('est_time', 0) or 0,
@@ -48,3 +50,8 @@ def public(task: dict) -> dict:
         'started_at': task.get('started_at'),
         'finished_at': task.get('finished_at'),
     }
+    if mode == 'script':
+        item['script'] = task['command']
+    elif mode == 'argv':
+        item['command_argv'] = task.get('command_argv')
+    return item

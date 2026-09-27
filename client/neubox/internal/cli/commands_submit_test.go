@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -43,8 +45,8 @@ func TestSubmitBuildsDockerTarget(t *testing.T) {
 	if received.DeviceNum != 0 || len(received.DeviceIDs) != 2 || received.Target == nil {
 		t.Fatalf("unexpected request: %+v", received)
 	}
-	if received.Command != "python train.py" {
-		t.Fatalf("unexpected command: %q", received.Command)
+	if received.Command != "python train.py" || len(received.CommandArgv) != 0 {
+		t.Fatalf("unexpected command payload: %+v", received)
 	}
 	if received.Target.Type != "docker" || received.Target.Image != "training-01" || received.Target.Env["MODE"] != "perf" {
 		t.Fatalf("unexpected target: %+v", received.Target)
@@ -54,6 +56,68 @@ func TestSubmitBuildsDockerTarget(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "task:") || !strings.Contains(out.String(), "abc123") {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestSubmitPreservesDockerArgvBoundaries(t *testing.T) {
+	var received commandRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		decodeRequest(t, request, &received)
+		writeJSON(t, writer, http.StatusAccepted, map[string]any{"task_id": "argv1", "position": 1})
+	}))
+	defer server.Close()
+
+	application, _, errOut := testApplication(server.URL)
+	want := []string{"neubox", "docker", "run", "--rm", "training:latest", "bash", "-c", "printf '%s\\n' '$HOME'", "", "a b"}
+	if code := application.run(append([]string{"submit", "--device-num", "2", "--"}, want...)); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if !reflect.DeepEqual(received.CommandArgv, want) || received.Command != "" || received.Script != "" {
+		t.Fatalf("argv boundaries lost: %+v", received)
+	}
+}
+
+func TestSubmitReadsScriptSnapshotWithoutChangingWhitespace(t *testing.T) {
+	var received commandRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		decodeRequest(t, request, &received)
+		writeJSON(t, writer, http.StatusAccepted, map[string]any{"task_id": "script1", "position": 1})
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "train.sh")
+	want := "#!/bin/bash\nset -e\ncd /data/project\ncat <<'EOF'\n  $HOME  \nEOF\n"
+	if err := os.WriteFile(path, []byte(want), 0600); err != nil {
+		t.Fatal(err)
+	}
+	application, _, errOut := testApplication(server.URL)
+	if code := application.run([]string{"submit", "--script", path}); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if received.Script != want || received.Command != "" || len(received.CommandArgv) != 0 {
+		t.Fatalf("script was changed: %+v", received)
+	}
+
+	application.in = bytes.NewBufferString(want)
+	if code := application.run([]string{"submit", "--script", "-"}); code != 0 {
+		t.Fatalf("stdin script: exit=%d stderr=%s", code, errOut.String())
+	}
+	if received.Script != want {
+		t.Fatalf("stdin script was changed: %q", received.Script)
+	}
+}
+
+func TestSubmitRejectsEmptyOrMixedScript(t *testing.T) {
+	application, _, errOut := testApplication("http://127.0.0.1:1")
+	application.in = bytes.NewBufferString("  \n")
+	if code := application.run([]string{"submit", "--script", "-"}); code != 2 {
+		t.Fatalf("empty script exit=%d stderr=%s", code, errOut.String())
+	}
+	if code := application.run([]string{"submit", "--script", "-", "--", "python", "train.py"}); code != 2 {
+		t.Fatalf("mixed script/argv exit=%d stderr=%s", code, errOut.String())
+	}
+	if code := application.run([]string{"submit", "--image", "training:latest", "--script", "-"}); code != 2 {
+		t.Fatalf("script with old image target exit=%d stderr=%s", code, errOut.String())
 	}
 }
 

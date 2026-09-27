@@ -790,6 +790,7 @@ class SbxManager:
     def release_container(self, mount_namespace: int, *,
                           expected_sandbox_name: str | None = None,
                           expected_container_id: str | None = None,
+                          expected_init_host_pid: int | None = None,
                           expected_init_start_time: int | None = None) -> None:
         """Atomically validate ownership, revoke authorization, and unpin."""
         # Keep the same ``self.lock → registration lock`` order as
@@ -799,12 +800,14 @@ class SbxManager:
                 mount_namespace,
                 expected_sandbox_name=expected_sandbox_name,
                 expected_container_id=expected_container_id,
+                expected_init_host_pid=expected_init_host_pid,
                 expected_init_start_time=expected_init_start_time,
             )
 
     def _release_container_locked(self, mount_namespace: int, *,
                                   expected_sandbox_name: str | None = None,
                                   expected_container_id: str | None = None,
+                                  expected_init_host_pid: int | None = None,
                                   expected_init_start_time: int | None = None) -> None:
         """注销容器归属: 撤 map → 删记录 → 放 pin，顺序不能反。
 
@@ -823,6 +826,10 @@ class SbxManager:
                 return
             if (expected_container_id is not None
                     and record.get('container_id') != expected_container_id):
+                return
+            if (expected_init_host_pid is not None
+                    and int(record.get('init_host_pid') or 0)
+                    != int(expected_init_host_pid)):
                 return
             if (expected_init_start_time is not None
                     and int(record.get('init_start_time') or 0)

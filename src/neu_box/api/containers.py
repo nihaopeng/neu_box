@@ -18,6 +18,7 @@ in ``runtime/neubox``.
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from flask import Blueprint, request
@@ -32,9 +33,12 @@ from neu_box.api.sandboxes import (
 from neu_box.runtime.container_intents import START_INTENT_TTL, StartIntentStore
 from neu_box.runtime.containers import (
     DockerExecutorError,
+    mount_namespace_of,
+    process_start_time,
     runtime_container_identity,
 )
 from neu_box.runtime.sandbox import SbxManager
+from neu_box.storage import CONTAINER_ACTIVE
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +71,33 @@ def _runtime_error_response(exc: DockerExecutorError):
     if exc.code == "sandbox_not_found":
         return {"error": str(exc), "code": exc.code}, 404
     return {"error": str(exc), "code": exc.code}, 409
+
+
+def _live_registration(manager: SbxManager, record: dict) -> bool:
+    """Distinguish a dead init process from an unreadable one after restart.
+
+    A retained pidfd gives a definitive answer.  After Worker restart, the
+    manager falls back to /proc; its boolean helper treats read errors as
+    dead, so verify a negative result before lending the container again.
+    """
+    if manager._container_alive(record):
+        return True
+    namespace = int(record['mount_namespace'])
+    if namespace in manager._container_fds:
+        return False
+    pid = int(record['init_host_pid'])
+    try:
+        start_time = process_start_time(pid)
+        if start_time != int(record['init_start_time']):
+            return False
+        current_namespace = mount_namespace_of(pid)
+    except DockerExecutorError:
+        try:
+            os.stat(f'/proc/{pid}')
+        except FileNotFoundError:
+            return False
+        raise
+    return current_namespace == namespace
 
 
 def _intent_request_fields(body: dict):
@@ -117,14 +148,42 @@ def lend_sandbox_for_start():
             "error": f"沙盒 {sandbox_name} 不属于用户 {username}",
             "code": "sandbox_owner_mismatch",
         }, 409
-    sandbox = SbxManager.get_instance().db.get_sandbox(sandbox_name)
-    if not sandbox or sandbox.get('state') == 'DESTROYING':
-        return {
-            "error": f"沙盒 {sandbox_name} 当前不可用",
-            "code": "sandbox_not_active",
-        }, 409
-
-    StartIntentStore.get_instance().lend(container_id, username, sandbox_name)
+    manager = SbxManager.get_instance()
+    intents = StartIntentStore.get_instance()
+    # Same lock order as the hook: registration stripe → manager locks →
+    # intent store.  Checking registrations and reserving a new intent in one
+    # critical section prevents another hook from finishing between them.
+    with intents.registration(container_id):
+        with manager.lock, manager._container_registration_lock:
+            sandbox = manager.db.get_sandbox(sandbox_name)
+            if not sandbox or sandbox.get('state') == 'DESTROYING':
+                return {
+                    "error": f"沙盒 {sandbox_name} 当前不可用",
+                    "code": "sandbox_not_active",
+                }, 409
+            try:
+                for record in manager.db.list_containers():
+                    if record.get('container_id') != container_id:
+                        continue
+                    if _live_registration(manager, record):
+                        return {
+                            "error": "容器仍在运行并持有现有沙盒授权；请先停止它",
+                            "code": "container_still_bound",
+                        }, 409
+            except Exception:
+                logger.exception('无法确认容器 %s 的旧登记是否仍存活', container_id)
+                return {
+                    "error": "无法确认容器旧授权状态，暂不发放启动借条",
+                    "code": "container_binding_unknown",
+                }, 409
+            lent = intents.lend(
+                container_id, username, sandbox_name, borrower_pid=pid,
+            )
+            if lent is None:
+                return {
+                    "error": "容器已有未完成或尚未确认的启动借条",
+                    "code": "start_intent_busy",
+                }, 409
     logger.warning(
         "已记录 start 借条：容器 %s（属主 %s）→ 沙盒 '%s'，%.0fs 内有效",
         container_id, username, sandbox_name, START_INTENT_TTL,
@@ -142,7 +201,7 @@ def lend_sandbox_for_start():
 def start_intent_state():
     """查一张借条有没有被认领：``neubox docker start`` 用它确认卡真的借出去了。
 
-    ``neubox`` 启动完容器后轮询这里；``state`` 为 ``consumed`` 才算绑上沙盒。
+    ``neubox`` 启动容器后轮询这里；完整登记成功才返回 ``consumed``。
     没有借条时返回 ``state: null``（不是 404：这里只回答"有没有"）。
     """
     body = {
@@ -153,9 +212,11 @@ def start_intent_state():
     fields, error = _intent_request_fields(body)
     if error is not None:
         return error
-    username, container_id, _pid = fields
+    username, container_id, pid = fields
 
-    entry = StartIntentStore.get_instance().peek(container_id, username)
+    # Only the CLI process that borrowed this intent acknowledges a consumed
+    # result.  A second CLI's query must not unlock a replacement borrow.
+    entry = StartIntentStore.get_instance().acknowledge(container_id, username, pid)
     return {
         "container_id": container_id,
         "sandbox_name": entry["sandbox_name"] if entry else None,
@@ -191,65 +252,32 @@ def register_runtime_container():
     if host_pid <= 0:
         return {"error": "host_pid 必须为正整数"}, 400
 
-    # 借条优先于 annotation：`neubox docker start` 刚声明过"这个容器该借哪个
-    # 沙盒"，而 annotation 里写的是建容器时那个（往往已经 release）。属主对不上
-    # 就当没有借条 —— 借条也只能借给容器属主自己名下的沙盒。
-    sandbox_name = None
-    lent = StartIntentStore.get_instance().take(
-        container_id, _sandbox_owner(sandbox_value))
-    if lent is not None:
-        sandbox_name = _sandbox_name_from_annotation(lent)
-        if sandbox_name is None:
-            logger.warning(
-                "start 借条里的沙盒 '%s' 已经不在了，容器 %s 退回 annotation '%s'",
-                lent, container_id, sandbox_value,
-            )
-    if sandbox_name is None:
-        sandbox_name = _sandbox_name_from_annotation(sandbox_value)
-    if sandbox_name is None:
-        return {
-            "error": "sandbox_cgroup 未匹配到 Worker 沙盒",
-            "code": "sandbox_not_found",
-        }, 404
-    if lent is not None and sandbox_name == lent:
-        logger.warning(
-            "容器 %s 按 start 借条绑到沙盒 '%s'（annotation 指向 '%s'）",
-            container_id, sandbox_name, sandbox_value,
-        )
+    # 同一容器的另一次 hook 不得在本次 complete/rollback 之前把暂时写入的
+    # 登记当作稳定授权。不同容器仍可并行登记。
+    intents = StartIntentStore.get_instance()
+    with intents.registration(container_id):
+        return _register_with_intent(body, container_id, host_pid,
+                                     sandbox_value, intents)
 
+
+def _same_registration(record: dict | None, identity,
+                       sandbox_name: str) -> bool:
+    """Only the exact runtime identity may be reused or rolled back."""
+    if not record:
+        return False
     try:
-        identity = runtime_container_identity(container_id, host_pid)
-    except DockerExecutorError as exc:
-        return _runtime_error_response(exc)
-
-    supplied_cgroup = body.get("container_cgroup")
-    supplied_mnt = body.get("mount_namespace")
-    if supplied_cgroup is not None and str(supplied_cgroup) != identity.container_cgroup:
-        return {
-            "error": "container_cgroup 与实际值不一致",
-            "code": "runtime_identity_changed",
-        }, 409
-    if supplied_mnt is not None:
-        try:
-            if int(supplied_mnt) != identity.mount_namespace:
-                raise ValueError
-        except (TypeError, ValueError):
-            return {
-                "error": "mount_namespace 与实际值不一致",
-                "code": "runtime_identity_changed",
-            }, 409
-
-    # 这里不另做孤儿回收：登记落在 ``register_container`` 里，它顺手钉住
-    # mnt ns 并对 init host_pid 开 pidfd 挂进 epoll —— 容器一退出，收尸线程
-    # 就被事件叫醒并注销；Worker 重启（fd 全丢）或事件处理失败留下的条目由
-    # ``reconcile_containers`` 对账清掉。
-    manager = SbxManager.get_instance()
-    try:
-        record, created = manager.register_runtime_container(
-            sandbox_name, identity,
+        return (
+            record['sandbox_name'] == sandbox_name
+            and record['container_id'] == identity.container_id
+            and int(record['mount_namespace']) == identity.mount_namespace
+            and int(record['init_host_pid']) == identity.init_host_pid
+            and int(record['init_start_time']) == identity.init_start_time
         )
-    except DockerExecutorError as exc:
-        return _runtime_error_response(exc)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _registration_response(record: dict, identity, created: bool):
     return {
         "sandbox_name": record["sandbox_name"],
         "container_id": record["container_id"],
@@ -257,3 +285,127 @@ def register_runtime_container():
         "container_cgroup": identity.container_cgroup,
         "status": "registered" if created else "already_registered",
     }, 201 if created else 200
+
+
+def _register_with_intent(body: dict, container_id: str, host_pid: int,
+                          sandbox_value: str, intents: StartIntentStore):
+    # 借条优先于 annotation。认领只保留本次意图，完整登记成功后才确认，
+    # 否则客户端可能把一次身份校验失败误判成已经获得设备授权。
+    owner = _sandbox_owner(sandbox_value)
+    intent_state, entry = intents.claim_state(container_id, owner)
+    if intent_state == 'busy':
+        return {
+            "error": "该容器的启动借条正在被另一次登记处理",
+            "code": "start_intent_busy",
+        }, 409
+    if intent_state == 'owner_mismatch':
+        return {
+            "error": "该容器存在其他属主的启动借条，不能使用旧 annotation 登记",
+            "code": "start_intent_owner_mismatch",
+        }, 409
+    claim = entry if intent_state == 'claimed' else None
+    completed = False
+    try:
+        if entry is not None:
+            sandbox_name = _sandbox_name_from_annotation(entry['sandbox_name'])
+        else:
+            sandbox_name = _sandbox_name_from_annotation(sandbox_value)
+        if sandbox_name is None and entry is not None:
+            return {
+                "error": f"start 借条里的沙盒 {entry['sandbox_name']} 已不可用",
+                "code": "sandbox_not_active",
+            }, 409
+        if sandbox_name is None:
+            return {
+                "error": "sandbox_cgroup 未匹配到 Worker 沙盒",
+                "code": "sandbox_not_found",
+            }, 404
+        if claim is not None:
+            logger.warning(
+                "容器 %s 按 start 借条绑到沙盒 '%s'（annotation 指向 '%s'）",
+                container_id, sandbox_name, sandbox_value,
+            )
+
+        try:
+            identity = runtime_container_identity(container_id, host_pid)
+        except DockerExecutorError as exc:
+            return _runtime_error_response(exc)
+
+        supplied_cgroup = body.get("container_cgroup")
+        supplied_mnt = body.get("mount_namespace")
+        if supplied_cgroup is not None and str(supplied_cgroup) != identity.container_cgroup:
+            return {
+                "error": "container_cgroup 与实际值不一致",
+                "code": "runtime_identity_changed",
+            }, 409
+        if supplied_mnt is not None:
+            try:
+                if int(supplied_mnt) != identity.mount_namespace:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return {
+                    "error": "mount_namespace 与实际值不一致",
+                    "code": "runtime_identity_changed",
+                }, 409
+
+        manager = SbxManager.get_instance()
+        if intent_state == 'consumed':
+            # A retry of the *same* hook may have lost the first HTTP reply.
+            # Return idempotently only for the exact already-bound identity;
+            # never create a second binding from a consumed intent.
+            with manager.lock, manager._container_registration_lock:
+                record = manager.db.get_container(identity.mount_namespace)
+                sandbox = manager.db.get_sandbox(sandbox_name)
+                if (record and record.get('state') == CONTAINER_ACTIVE
+                        and sandbox and sandbox.get('state') != 'DESTROYING'
+                        and _same_registration(record, identity, sandbox_name)):
+                    return _registration_response(record, identity, False)
+            return {
+                "error": "启动借条已被其他容器运行消费",
+                "code": "start_intent_changed",
+            }, 409
+
+        # ``register_container`` pins mnt ns and watches PID exit. A new
+        # registration can be rolled back immediately if its claim changes.
+        try:
+            record, created = manager.register_runtime_container(
+                sandbox_name, identity,
+            )
+        except DockerExecutorError as exc:
+            return _runtime_error_response(exc)
+        if (claim is not None and not created
+                and (record.get('state') != CONTAINER_ACTIVE
+                     or not _same_registration(record, identity, sandbox_name))):
+            return {
+                "error": "容器已登记到另一沙盒或另一运行实例",
+                "code": "docker_container_registered_elsewhere",
+            }, 409
+        if claim is not None:
+            if not intents.complete(container_id, owner, claim['sequence']):
+                if created:
+                    try:
+                        manager.release_container(
+                            identity.mount_namespace,
+                            expected_sandbox_name=sandbox_name,
+                            expected_container_id=identity.container_id,
+                            expected_init_host_pid=identity.init_host_pid,
+                            expected_init_start_time=identity.init_start_time,
+                        )
+                        remaining = manager.db.get_container(identity.mount_namespace)
+                        if _same_registration(remaining, identity, sandbox_name):
+                            raise RuntimeError('本次登记仍存在')
+                    except Exception:
+                        logger.exception('start 借条失效后回滚容器 %s 授权失败', container_id)
+                        return {
+                            "error": "启动借条失效，容器授权回滚失败",
+                            "code": "start_intent_rollback_failed",
+                        }, 500
+                return {
+                    "error": "登记期间启动借条已失效或被另一次启动替换",
+                    "code": "start_intent_changed",
+                }, 409
+            completed = True
+        return _registration_response(record, identity, created)
+    finally:
+        if claim is not None and not completed:
+            intents.abort(container_id, owner, claim['sequence'])

@@ -11,7 +11,9 @@ import logging
 import os
 import pwd
 import signal
+import threading
 import time
+from typing import Callable
 
 from neu_box.runtime.sandbox import SbxManager
 from neu_box.execution import logs
@@ -70,6 +72,10 @@ async def _execute_in_sandbox(
     timeout: int | None = None,
     username: str = '',
     target: dict | None = None,
+    command_mode: str = 'command',
+    command_argv: list[str] | None = None,
+    on_spawn: Callable[[asyncio.subprocess.Process], bool] | None = None,
+    on_exit: Callable[[asyncio.subprocess.Process], None] | None = None,
 ) -> dict:
     """异步执行 Host 命令；输出写入任务日志，不创建读流线程。"""
     timeout = command_timeout() if timeout is None else timeout
@@ -84,6 +90,7 @@ async def _execute_in_sandbox(
 
     proc = None
     reader = None
+    script_fd = None
     output: list[str] = []
     log = logs.TaskLog(logs.log_path(logs.task_id_of(sandbox_name)))
 
@@ -100,6 +107,48 @@ async def _execute_in_sandbox(
             logger.warning('读取 Host stdout 流异常: %s', exc)
 
     try:
+        if command_mode == 'script':
+            # Bash reads the exact snapshot from an anonymous, sealed file.
+            # It is created only when the queued task starts, so no script
+            # pathname or data needs to survive a Worker restart.
+            import fcntl
+
+            script_fd = os.memfd_create('neubox-task-script', os.MFD_ALLOW_SEALING)
+            script_bytes = command.encode('utf-8')
+            with os.fdopen(os.dup(script_fd), 'wb') as stream:
+                stream.write(script_bytes)
+            os.lseek(script_fd, 0, os.SEEK_SET)
+            if username:
+                os.fchown(script_fd, target_uid, target_gid)
+            os.fchmod(script_fd, 0o400)
+            seals = (fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW |
+                     fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
+            fcntl.fcntl(script_fd, fcntl.F_ADD_SEALS, seals)
+            shell_args = (
+                '/bin/sh', '-c',
+                'kill -STOP "$$"; exec /bin/bash -i "$1"',
+                'neu-box', f'/proc/self/fd/{script_fd}',
+            )
+        elif command_mode == 'argv':
+            if not command_argv:
+                raise ValueError('argv 任务缺少 command_argv')
+            # Let interactive Bash initialize the user's PATH, then exec the
+            # exact argv. No user argument is parsed as shell source.
+            shell_args = (
+                '/bin/sh', '-c',
+                'kill -STOP "$$"; exec /bin/bash -i -c \'exec "$@"\' '
+                'neu-box "$@"',
+                'neu-box', *command_argv,
+            )
+        elif command_mode == 'command':
+            # Preserve the old shell command behavior for existing callers.
+            shell_args = (
+                '/bin/sh', '-c',
+                'kill -STOP "$$"; exec /bin/bash -i -c "$1"',
+                'neu-box', command,
+            )
+        else:
+            raise ValueError(f'未知的任务执行模式: {command_mode}')
         target = target or {}
         environment = {**os.environ, **(target.get('env') or {}), 'PYTHONUNBUFFERED': '1'}
         if username:
@@ -122,25 +171,34 @@ async def _execute_in_sandbox(
             'env': environment,
             'start_new_session': True,
         }
+        if script_fd is not None:
+            spawn_kwargs['pass_fds'] = (script_fd,)
         if username:
-            spawn_kwargs.update({
-                'user': target_uid,
-                'group': target_gid,
-                'extra_groups': os.getgrouplist(username, target_gid),
-                'cwd': target.get('workdir') or target_dir,
-            })
+            spawn_kwargs['cwd'] = target.get('workdir') or target_dir
+            if (target_uid, target_gid) != (os.geteuid(), os.getegid()):
+                spawn_kwargs.update({
+                    'user': target_uid,
+                    'group': target_gid,
+                    'extra_groups': os.getgrouplist(username, target_gid),
+                })
         proc = await asyncio.create_subprocess_exec(
             # Stop before evaluating the command.  The parent can then join
             # the exact PID into the sandbox without a create→join race,
             # while avoiding Python's unsafe preexec_fn in a multithreaded
             # worker.  This also works for malformed shell commands.
-            '/bin/sh', '-c',
-            # -i：让 bash source 完整 ~/.bashrc（绕过文件开头那段
-            # *非交互* guard），用户的 conda/PATH/环境变量才在。
-            'kill -STOP "$$"; exec /bin/bash -i -c "$1"',
-            'neu-box', command,
+            # -i lets Bash source ~/.bashrc and preserve the user's PATH.
+            *shell_args,
             **spawn_kwargs,
         )
+        if on_spawn is not None and not on_spawn(proc):
+            # Cancellation won the spawn race. The gate shell has not been
+            # admitted to the sandbox or allowed to run user code.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await _wait_process(proc, 5)
+            return result(error='cancelled')
         deadline = time.monotonic() + 5
         while _process_state(proc.pid) not in {'T', 't'}:
             if proc.returncode is not None:
@@ -204,6 +262,11 @@ async def _execute_in_sandbox(
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)
         return result(stderr=f'Execution error: {exc}', error='exception')
+    finally:
+        if proc is not None and on_exit is not None:
+            on_exit(proc)
+        if script_fd is not None:
+            os.close(script_fd)
 
 
 class HostCommandExecutor(CommandBackend):
@@ -212,15 +275,46 @@ class HostCommandExecutor(CommandBackend):
     def __init__(self, *, task: dict, sandbox_name: str):
         self.task = task
         self.sandbox_name = sandbox_name
+        self._process_lock = threading.Lock()
+        self._process: asyncio.subprocess.Process | None = None
+        self._cancelled = False
+
+    def _on_spawn(self, proc: asyncio.subprocess.Process) -> bool:
+        with self._process_lock:
+            if self._cancelled:
+                return False
+            self._process = proc
+            return True
+
+    def _on_exit(self, proc: asyncio.subprocess.Process) -> None:
+        with self._process_lock:
+            if self._process is proc:
+                self._process = None
 
     async def run(self, timeout: int | None) -> dict:
         return await _execute_in_sandbox(
             self.task['command'], self.sandbox_name, timeout,
             self.task['user_id'],
             self.task.get('target') or self.task.get('target_spec'),
+            self.task.get('command_mode') or 'command',
+            self.task.get('command_argv'),
+            self._on_spawn, self._on_exit,
         )
 
     def cancel(self):
+        # Stop the script before Docker cleanup can take time. Otherwise a
+        # script whose current docker exec is interrupted by docker stop may
+        # continue into its next line while cancellation is in progress.
+        with self._process_lock:
+            self._cancelled = True
+            proc = self._process
+        if proc is not None and proc.returncode is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                logger.warning('取消任务时终止进程组 %s 失败: %s', proc.pid, exc)
         SbxManager.get_instance().destroy_sandbox(self.sandbox_name)
 
 

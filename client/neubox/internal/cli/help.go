@@ -16,6 +16,7 @@ func (a *app) printHelpTo(writer io.Writer) {
     neubox shell [资源选项...]
     neubox [--json] acquire [选项...]
     neubox [--json] submit [选项...] -- <command> [args...]
+    neubox [--json] submit [选项...] --script FILE|-
     neubox [--json] release [sandbox_name]
     neubox [--json] cancel <id> [--kind task|acquire]
     neubox [--json] docker run <docker 参数...>
@@ -36,6 +37,7 @@ func (a *app) printHelpTo(writer io.Writer) {
     result --json          在任务元数据中增加 log 字段
     wait                   增量输出任务日志并等待终态；暂不支持 --json
     submit ... -- ...      -- 后面的参数属于目标命令，不再解析为 neubox 选项
+    submit --script FILE|- 提交时读取完整脚本；- 从标准输入读取
 
 命令说明:
     shell                  为子 shell 申请沙盒；退出自动释放，当前 shell 不变
@@ -47,7 +49,7 @@ func (a *app) printHelpTo(writer io.Writer) {
     docker run              透传 docker run，自动补上沙盒 annotation；
                            没有自己的选项，参数一个不改地交给 docker
     docker start            把停着的容器拉起来，并把当前 shell 的沙盒借给它
-                           （容器名放最前面，docker 的选项跟在后面）
+                           （容器名放最前面，docker 的选项跟在后面）；借卡失败则报错
     docker restart          停止运行中的受管容器，再借当前 shell 的沙盒启动
     docker status           查询容器运行状态和当前授权设备
     docker exec             不支持借卡；请使用原生 docker exec，先查 docker status
@@ -79,6 +81,7 @@ submit 选项:
     --mount SRC:DST[:ro|rw] Docker：挂载已有路径，默认只读，可重复
     --output HOST[:DST]    Docker：创建并挂载可写输出目录，默认 DST=/outputs
     --command "..."        命令字符串；也可将命令放在 -- 后
+    --script FILE|-        提交脚本原文快照；与 --command 和 -- 互斥
 
 其他命令:
     list                         列出沙盒和资源
@@ -100,7 +103,9 @@ submit 选项:
     neubox submit --device 1 -- npu-smi info
     neubox submit --device-num 1 --priority 1 -- python train.py
     neubox submit --wait --device-num 1 -- python train.py
-    neubox submit --image training:v1 --project --output ./runs/exp1 --wait -- python train.py
+    neubox submit --device-num 2 -- neubox docker run --rm training:latest python train.py
+    neubox submit --device-num 2 -- neubox docker start train-1 -a
+    neubox submit --device-num 2 --script train.sh
     neubox wait 7c65d5ac21f4
     neubox tasks --all           # 含较早结束的任务
     neubox release                # 释放当前 shell 的沙盒
@@ -124,8 +129,8 @@ Bash、curl 或 Python。
 
 docker start 拿卡靠的不是 annotation（那是建容器时写死的、改不了），而是启动前
 先存的一张借条：把当前 shell 所在沙盒借给这个容器，10 秒内有效、一次性。所以
-跨 shell 换沙盒继续用同一个容器要走 neubox docker start；直接敲原生
-docker start 没有借条，容器起得来但零卡。
+跨 shell 换沙盒继续用同一个容器要走 neubox docker start；借卡失败会报错并
+尝试停止容器。原生 docker start 不会建立新的借条，不能用它换卡。
 
 运行中的容器不能靠 docker exec 改变授权设备；要换卡，先进入目标沙盒，再使用
 neubox docker restart。restart 会中断容器工作，只支持创建时已有 annotation 的
@@ -135,6 +140,12 @@ Worker 当前授权记录，不是驱动健康检测。更多细节见 neubox do
 submit 的 Host 目标从提交时的工作目录运行；只有 --env 显式选择的变量会从
 提交终端传入。Docker --project/--mount/--output 使用 Worker 节点上的宿主路径，
 不上传文件；输出目录是可写 bind mount，容器结束后文件留在宿主机。
+--script 在提交时读取原文，排队后修改本地文件不会改变已提交任务。脚本中的
+路径仍位于执行节点；脚本由 Bash 执行，首行 shebang 不改变解释器，stdin
+是 /dev/null。任务以入口命令或脚本退出为结束点；仅 docker start 或
+docker run -d 很快返回，随后任务会清理其容器。需要等待原程序可用 start -a。
+submit 的 --cpu/--mem 约束宿主任务沙盒内的进程；脚本里启动的 Docker 容器
+不会自动继承，可在 docker run 中使用原生资源限制参数。
 
 cancel 的语义：排队中的条目被摘出队列（任务留痕为 cancelled，记录与日志保留）；
 运行中的任务发取消信号；已经拿到卡的 acquire 就地释放，不需要再补一次 release。

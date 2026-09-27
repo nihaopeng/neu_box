@@ -84,13 +84,17 @@ func (a *app) runDocker(args []string) int {
 //
 // 为什么需要这一层：容器上那行 annotation 是**建容器时**写死的，而
 // `docker start` 既不接受 `--annotation`、也看不到调用方是谁（它是 dockerd
-// 干的活）。沙盒一旦 release，老容器再 start 就只剩"起得来但零卡"。这里把
+// 干的活）。沙盒一旦 release，旧 annotation 不再指向可用授权。这里把
 // "这次 start 该用哪个沙盒"显式告诉 Worker（借条，10 秒内有效、一次性），
-// hook 登记时认领；不经过 neubox 的 start 没有借条，照旧零卡。
+// hook 登记成功后确认认领；无法确认时尝试停止容器并返回失败。
 func (a *app) runDockerStart(args []string) int {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return a.usageError("用法: " + dockerStartUsage +
 			"（容器名放最前面，docker 自己的选项跟在它后面）")
+	}
+	attached, err := dockerStartAttachOption(args[1:])
+	if err != nil {
+		return a.usageError(err.Error())
 	}
 	if a.insideContainer() {
 		return a.usageError("容器内不能按 PID 反查沙盒（PID namespace 与宿主机" +
@@ -104,56 +108,139 @@ func (a *app) runDockerStart(args []string) int {
 			"PATH 里找不到 docker 命令；请在装了 docker 的主机上运行 neubox docker start")
 		return 1
 	}
-	// 借条是加分项，不是门禁：借不上照样 start，容器只是拿不到卡（跟原生
-	// docker start 一个结果）。卡有没有借到我们明说，不用退出码代替。
-	containerID, sandboxName := a.lendSandbox(dockerBinary, container)
+	info, err := a.inspectDockerContainer(dockerBinary, container)
+	if err != nil {
+		return a.internalError("docker_inspect_failed", err)
+	}
+	if info.State.Running {
+		return a.usageError("容器已经运行；exec 只能沿用已有授权。需要重新借卡请显式使用 neubox docker restart " + container)
+	}
+	if strings.TrimSpace(info.HostConfig.Annotations["sandbox_cgroup"]) == "" {
+		return a.usageError("容器创建时没有 sandbox_cgroup annotation，无法借卡；请用 neubox docker run 创建受管容器")
+	}
+	sandboxName, err := a.lendSandboxTo(info.ID)
+	if err != nil {
+		return a.internalError("sandbox_not_lent", err)
+	}
 
-	// 借条已经落账。用子进程而不是 execve：start 之后还要回查认领结果。
+	// 借条已经落账。-a 会等待容器退出，必须在等待期间检查绑定。
 	argv := append([]string{dockerBinary, "start"}, args...)
+	if attached {
+		return a.runAttachedDockerStart(dockerBinary, argv, container, info.ID, sandboxName)
+	}
 	status, err := a.runFn(dockerBinary, argv, os.Environ())
 	if err != nil {
 		a.printError("docker_exec_failed", fmt.Sprintf("启动 docker 失败: %v", err))
 		return 1
 	}
-	if status != 0 || sandboxName == "" {
+	if status != 0 {
 		return status
 	}
-	return a.confirmStartBinding(container, containerID, sandboxName)
+	return a.confirmStartBinding(dockerBinary, container, info.ID, sandboxName)
 }
 
-// lendSandbox 尽力借沙盒：借到了返回容器 ID 和沙盒名，借不到返回空串并
-// 打一行警告。容器找不到、不在沙盒里、沙盒正在销毁，都只是"没借到"。
-func (a *app) lendSandbox(dockerBinary, container string) (string, string) {
-	containerID, err := a.inspectContainerID(dockerBinary, container)
-	if err != nil {
-		a.printWarning("docker_inspect_failed", fmt.Sprintf(
-			"查不到容器 %s 的 ID（%v），这次不借沙盒：容器起来了也没有 NPU",
-			container, err))
-		return "", ""
+// Docker's -a keeps the client in the foreground until the container exits.
+// Watch the short-lived start intent while that client is still waiting, then
+// return the Docker exit code once the workload finishes.
+func (a *app) runAttachedDockerStart(binary string, argv []string, container, containerID, sandboxName string) int {
+	type runResult struct {
+		status int
+		err    error
 	}
-	sandboxName, err := a.lendSandboxTo(containerID)
+	started, err := a.startFn(binary, argv, os.Environ())
 	if err != nil {
-		a.printWarning("sandbox_not_lent", fmt.Sprintf(
-			"没借到沙盒（%v）：容器照常启动，但里面看不到 NPU", err))
-		return containerID, ""
+		return a.internalError("docker_exec_failed", err)
 	}
-	return containerID, sandboxName
+	finished := make(chan runResult, 1)
+	go func() {
+		status, err := started.Wait()
+		finished <- runResult{status, err}
+	}()
+	abort := func(completed bool) {
+		if !completed {
+			if err := started.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				a.printWarning("docker_client_kill_failed", fmt.Sprintf("无法中止 docker start -a: %v", err))
+			}
+			select {
+			case <-finished:
+			case <-time.After(dockerStartConfirmTimeout):
+				a.printWarning("docker_client_wait_failed", "中止后 docker start -a 仍未退出")
+			}
+		}
+		a.stopAfterBindingFailure(binary, containerID, completed)
+	}
+
+	deadline := time.Now().Add(dockerStartConfirmTimeout)
+	var completed *runResult
+	for {
+		state, actualSandbox, err := a.startIntentState(containerID)
+		if err != nil {
+			abort(completed != nil)
+			return a.internalError("sandbox_binding_unknown", err)
+		}
+		if state == "consumed" {
+			if actualSandbox != sandboxName {
+				abort(completed != nil)
+				return a.internalError("sandbox_binding_mismatch", fmt.Errorf("容器 %s 借条被沙盒 %q 认领，预期 %q", container, actualSandbox, sandboxName))
+			}
+			a.printStarted(container, containerID, sandboxName)
+			if completed == nil {
+				result := <-finished
+				completed = &result
+			}
+			if completed.err != nil {
+				return a.internalError("docker_exec_failed", completed.err)
+			}
+			return completed.status
+		}
+		if completed != nil || time.Now().After(deadline) {
+			abort(completed != nil)
+			if completed != nil && completed.err != nil {
+				return a.internalError("docker_exec_failed", completed.err)
+			} else if completed != nil && completed.status != 0 {
+				return completed.status
+			}
+			a.printError("sandbox_not_bound", fmt.Sprintf("容器 %s 未绑定沙盒 %s；已尝试停止容器", container, sandboxName))
+			return 1
+		}
+		select {
+		case result := <-finished:
+			completed = &result
+		case <-time.After(dockerStartConfirmPoll):
+		}
+	}
 }
 
-// inspectContainerID 把容器名/短 ID 解析成完整容器 ID。
-//
-// 借条按 ID 记，hook 报上来的也是 ID：容器名可以被改，ID 不会。
-func (a *app) inspectContainerID(dockerBinary, container string) (string, error) {
-	raw, err := a.outputFn(dockerBinary, "inspect", "--format", "{{.Id}}", container)
-	if err != nil {
-		return "", fmt.Errorf("docker inspect 失败: %w", err)
+func dockerStartAttachOption(options []string) (bool, error) {
+	attached := false
+	for index := 0; index < len(options); index++ {
+		option := options[index]
+		switch {
+		case option == "-a" || option == "--attach" || option == "-ai" || option == "-ia":
+			attached = true
+		case option == "-i" || option == "--interactive":
+			attached = true
+		case option == "--checkpoint" || option == "--checkpoint-dir" ||
+			strings.HasPrefix(option, "--checkpoint=") || strings.HasPrefix(option, "--checkpoint-dir="):
+			return false, errors.New("neubox docker start 不支持 checkpoint 恢复；当前 runtime 只在普通容器创建时登记设备授权")
+		case option == "--detach-keys":
+			index++
+			if index == len(options) {
+				return false, fmt.Errorf("docker start 选项 %s 缺少参数", option)
+			}
+		case strings.HasPrefix(option, "--detach-keys="):
+		case option == "-a=true" || option == "--attach=true" ||
+			option == "-i=true" || option == "--interactive=true":
+			attached = true
+		case option == "-a=false" || option == "--attach=false" ||
+			option == "-i=false" || option == "--interactive=false":
+		case strings.HasPrefix(option, "-"):
+			return false, fmt.Errorf("不支持的 docker start 选项 %s", option)
+		default:
+			return false, fmt.Errorf("neubox docker start 只接受一个容器；额外参数 %q", option)
+		}
 	}
-	containerID := strings.TrimSpace(string(raw))
-	if len(containerID) != 64 {
-		return "", fmt.Errorf("docker inspect 给出的容器 ID 不是 64 位十六进制：%q",
-			containerID)
-	}
-	return containerID, nil
+	return attached, nil
 }
 
 // lendSandboxTo 存借条：把本进程（= 当前 shell）所在的沙盒借给这个容器。
@@ -194,35 +281,32 @@ func (a *app) lendSandboxTo(containerID string) (string, error) {
 
 // confirmStartBinding 回查借条有没有被认领。
 //
-// hook 在 create 阶段就登记完了，正常第一次查就是 consumed。没认领就明说：
-// 容器起来了，但里面看不到 NPU —— 否则用户会以为卡借出去了，到容器里才发现
-// 没有。start 本身成功了，退出码照 docker 的来。
-func (a *app) confirmStartBinding(container, containerID, sandboxName string) int {
-	bound, err := a.waitStartBinding(containerID)
+// Worker 只有完整登记成功后才把借条标成 consumed。
+func (a *app) confirmStartBinding(dockerBinary, container, containerID, sandboxName string) int {
+	bound, err := a.waitStartBinding(containerID, sandboxName)
 	if err != nil {
-		a.printWarning("sandbox_binding_unknown", fmt.Sprintf(
-			"无法确认容器 %s 有没有绑上沙盒 %s（%v）；容器已经起来了",
-			container, sandboxName, err))
-		return 0
+		a.stopAfterBindingFailure(dockerBinary, containerID, true)
+		return a.internalError("sandbox_binding_unknown", fmt.Errorf("无法确认容器 %s 是否已绑定沙盒 %s: %w", container, sandboxName, err))
 	}
 	if bound {
 		return a.printStarted(container, containerID, sandboxName)
 	}
-	a.printWarning("sandbox_not_bound", fmt.Sprintf(
-		"容器 %s 绑沙盒 %s 没有生效：它起来了，但里面看不到 NPU（借条可能已过期）。"+
-			"要卡可以在沙盒里再跑一次 neubox docker start %s",
-		container, sandboxName, container))
-	return 0
+	a.stopAfterBindingFailure(dockerBinary, containerID, true)
+	a.printError("sandbox_not_bound", fmt.Sprintf("容器 %s 未绑定沙盒 %s；已尝试停止容器", container, sandboxName))
+	return 1
 }
 
-func (a *app) waitStartBinding(containerID string) (bool, error) {
+func (a *app) waitStartBinding(containerID, expectedSandbox string) (bool, error) {
 	deadline := time.Now().Add(dockerStartConfirmTimeout)
 	for {
-		state, err := a.startIntentState(containerID)
+		state, sandboxName, err := a.startIntentState(containerID)
 		if err != nil {
 			return false, err
 		}
 		if state == "consumed" {
+			if sandboxName != expectedSandbox {
+				return false, fmt.Errorf("借条被沙盒 %q 认领，预期 %q", sandboxName, expectedSandbox)
+			}
 			return true, nil
 		}
 		if time.Now().After(deadline) {
@@ -234,7 +318,7 @@ func (a *app) waitStartBinding(containerID string) (bool, error) {
 }
 
 // startIntentState 查借条的认领状态；没有借条时返回空串。
-func (a *app) startIntentState(containerID string) (string, error) {
+func (a *app) startIntentState(containerID string) (string, string, error) {
 	query := url.Values{
 		"container_id": []string{containerID},
 		"username":     []string{a.config.username},
@@ -243,22 +327,63 @@ func (a *app) startIntentState(containerID string) (string, error) {
 	status, raw, err := a.worker.Request(
 		http.MethodGet, "/container/intent", query, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := api.ResponseError(status, raw); err != nil {
 		message, _ := api.ErrorDetails(status, raw)
-		return "", fmt.Errorf("HTTP %d %s", status, message)
+		return "", "", fmt.Errorf("HTTP %d %s", status, message)
 	}
 	var response struct {
-		State *string `json:"state"`
+		State       *string `json:"state"`
+		SandboxName *string `json:"sandbox_name"`
 	}
 	if err := api.DecodeJSON(raw, &response); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if response.State == nil {
-		return "", nil
+		return "", "", nil
 	}
-	return *response.State, nil
+	if response.SandboxName == nil {
+		return *response.State, "", nil
+	}
+	return *response.State, *response.SandboxName, nil
+}
+
+func (a *app) stopAfterBindingFailure(dockerBinary, containerID string, startCompleted bool) {
+	_, stopErr := a.outputFn(dockerBinary, "stop", containerID)
+	if stopErr == nil {
+		return
+	}
+	// If an attached client was killed while dockerd was still starting the
+	// container, an early stop can report "not running". Recheck for a short
+	// period and stop any delayed start. A completed Docker start needs only
+	// one inspection because its daemon request has already returned.
+	deadline := time.Now()
+	if !startCompleted {
+		deadline = deadline.Add(2 * time.Second)
+	}
+	var inspectErr error
+	for {
+		info, err := a.inspectDockerContainer(dockerBinary, containerID)
+		inspectErr = err
+		if err == nil && info.State.Running {
+			_, stopErr = a.outputFn(dockerBinary, "stop", containerID)
+			if stopErr == nil {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			if err == nil && !info.State.Running {
+				return
+			}
+			break
+		}
+		time.Sleep(dockerStartConfirmPoll)
+	}
+	if inspectErr != nil {
+		a.printWarning("docker_inspect_failed", fmt.Sprintf("停止后无法确认容器 %s 状态: %v", shorthandContainerID(containerID), inspectErr))
+	}
+	a.printWarning("docker_stop_failed", fmt.Sprintf("无法停止授权未确认的容器 %s: %v", shorthandContainerID(containerID), stopErr))
 }
 
 func (a *app) printStarted(container, containerID, sandboxName string) int {
@@ -351,8 +476,9 @@ func (a *app) printDockerHelp() {
     docker start 的事多一层：容器上那行 annotation 是建容器时写死的，而
     `+"`docker start`"+` 既没有 --annotation、也看不到是谁在调。所以这里先把这个
     shell 的沙盒存成一张借条（10 秒内有效、一次性），hook 登记时认领；
-    认领不到就是"容器起来了但零卡"。直接用原生 docker start 没有借条，
-    同样零卡 —— 那条路不会被放行成"有卡"。
+    认领失败会报错并尝试停止容器。原生 docker start 不会建立新的借条，
+    不能用它换卡。需要等待容器原程序结束时使用 neubox docker start <容器> -a。
+    checkpoint 恢复不经过当前 runtime 的普通 create 授权路径，因此拒绝。
 
     docker restart 用于运行中的受管容器：先停止并等待旧授权撤销，再按当前
     shell 的沙盒重新启动。它会中断容器里的工作；没有 annotation 的容器

@@ -34,6 +34,46 @@ type OutputFn func(path string, args ...string) ([]byte, error)
 // 需要子进程，前者要回查借条，后者要在退出时释放沙盒。
 type RunFn func(path string, argv []string, env []string) (int, error)
 
+// StartedCommand keeps a foreground Docker client controllable while its
+// short-lived resource binding is being confirmed.
+type StartedCommand interface {
+	Wait() (int, error)
+	Kill() error
+}
+
+type StartFn func(path string, argv []string, env []string) (StartedCommand, error)
+
+type startedOSCommand struct{ command *exec.Cmd }
+
+func (started startedOSCommand) Wait() (int, error) {
+	err := started.command.Wait()
+	if err == nil {
+		return 0, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		return exitError.ExitCode(), nil
+	}
+	return -1, err
+}
+
+func (started startedOSCommand) Kill() error {
+	return started.command.Process.Kill()
+}
+
+func defaultStart(path string, argv []string, env []string) (StartedCommand, error) {
+	command := exec.Command(path, argv[1:]...)
+	command.Args = argv
+	command.Env = env
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	return startedOSCommand{command}, nil
+}
+
 func defaultExec(path string, argv []string, env []string) error {
 	return syscall.Exec(path, argv, env)
 }

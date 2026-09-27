@@ -155,6 +155,13 @@ neubox shell --device-num 2
 # 提交四卡任务并增量跟踪日志
 neubox submit --device-num 4 --priority 1 --wait -- python train.py
 
+# 提交多步脚本；按原文保存，任务在脚本退出后清理沙盒
+neubox submit --device-num 2 --script - <<'SH'
+set -e
+cd /data/project
+neubox docker run --rm -v /data:/data training:latest python /data/train.py
+SH
+
 # 项目和输出保留在宿主机
 neubox submit --image training:v1 --project --output ./runs/exp1 \
   --wait -- python train.py

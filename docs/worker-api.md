@@ -85,7 +85,7 @@ POST /tasks
 Content-Type: application/json
 ```
 
-Host 任务示例：
+Host 任务示例（兼容原有 `command` 入口）：
 
 ```bash
 curl --noproxy '*' -sS \
@@ -105,12 +105,30 @@ curl --noproxy '*' -sS \
 
 赶论文（高优先级）任务示例，加上 `"priority": 1` 即可。
 
+提交多行脚本时使用 `script`。Worker 保存提交时的完整文本，排队期间修改
+客户端文件不会改变任务：
+
+```json
+{
+  "user_id": "yuxd",
+  "script": "set -e\ncd /data/project\nneubox docker run --rm training:latest python train.py\n",
+  "device_num": 2,
+  "target": {"type": "host"}
+}
+```
+
+不需要 Shell 解释命令参数时使用 `command_argv`，例如
+`["python", "train.py", "--output", "a b"]`。它保留每个参数的边界。
+`command`、`script`、`command_argv` 必须且只能提供一个；后两者只支持 Host
+目标。容器任务可在 Host 脚本中调用 `neubox docker run/start`，由包装命令在
+容器启动时借卡；原生 `docker exec` 只能沿用容器已有授权。
+
 请求字段：
 
 | 字段 | 必填 | 默认值 | 含义 |
 |---|---:|---:|---|
 | `user_id` | 是 | — | Worker 宿主机上已存在的 Linux 用户；Host 命令以该用户运行 |
-| `command` | 是 | — | 要执行的完整 Shell 命令 |
+| `command` / `script` / `command_argv` | 三选一 | — | Shell 命令字符串、原文脚本，或保留参数边界的字符串数组 |
 | `device_num` | 否 | `0` | 自动分配的设备数量，非负整数；`0` 表示不申请设备 |
 | `device_ids` | 否 | `[]` | 指定设备；推荐只传 minor，如 `["0","2"]`；也接受与本机设备完全一致的 `major:minor`；非空时优先于 `device_num` |
 | `cpu` | 否 | `0` | CPU 核数，非负整数；`0` 表示不限制 |
@@ -165,6 +183,11 @@ HTTP/1.1 202 Accepted
 资源沙盒并切换到 `user_id`。
 
 `command` 是完整 Shell 命令，调用方不得把未经处理的外部输入直接拼接进去。
+`script` 使用交互式 Bash 执行，保留换行、缩进、注释和 heredoc；即使首行写了
+shebang，当前仍由 Bash 解释。`command_argv` 在加载 Bash 环境后直接执行给定
+参数数组，不把参数重新拼成 Shell 源码。任务运行时的标准输入是 `/dev/null`；
+脚本内部仍可自行使用管道或 heredoc。入口进程或脚本退出后，Worker 清理该
+沙盒中的宿主进程和已登记容器，再释放资源。
 Worker 在进程管道层合并 stdout 和 stderr，因此 Bash 初始化错误、语法解析错误、
 `command not found`、权限错误及程序写入 stderr 的内容都会进入任务日志。Shell
 返回非零时任务状态为 `failed`，具体报错读取日志，退出码读取 `result.returncode`。
@@ -252,6 +275,7 @@ curl --noproxy '*' -sS "$WORKER/tasks"
       "task_id": "7c65d5ac21f4",
       "user_id": "yuxd",
       "command": "python train.py",
+      "mode": "command",
       "status": "queued",
       "position": 1,
       "priority": 0,
@@ -316,6 +340,7 @@ curl --noproxy '*' -sS \
   "task_id": "7c65d5ac21f4",
   "user_id": "yuxd",
   "command": "python train.py",
+  "mode": "command",
   "status": "completed",
   "position": 1,
   "priority": 0,
@@ -349,6 +374,9 @@ curl --noproxy '*' -sS \
 
 时间字段是 Unix 时间戳（秒，可能带小数）。任务不存在时返回 HTTP `404`。
 标准输出和标准错误不放在此响应中，应通过日志接口读取。
+`mode` 为 `command`、`script` 或 `argv`。脚本任务另有 `script` 字段，值为
+提交时的原文；argv 任务另有 `command_argv` 数组。两种任务也保留可读的
+`command` 展示字段；argv 任务执行时以 `command_argv` 为准。
 
 ### 读取任务日志
 
@@ -492,7 +520,7 @@ GET /healthz
   "role": "worker",
   "api_version": 2,
   "version": "0.5.0",
-  "schema_version": 7
+  "schema_version": 8
 }
 ```
 
@@ -716,7 +744,9 @@ mount namespace 的 PID 一律拒绝，否则等于把整机登记成受托方�
 
 借条只在属主一致时生效：借条的属主取自它存的沙盒名 `sbx_<属主>_<id>.slice`，
 必须和 annotation 里的属主相同 —— 别人的容器借不走你的沙盒。借条是一次性的，
-认领后即作废，回到规则 2。
+hook 先认领，完整登记成功后才将状态标为 `consumed`。认领中的重复登记返回
+`409 start_intent_busy`；若同一容器有其他属主尚未确认的借条，则返回
+`409 start_intent_owner_mismatch`。两者都不能悄悄回退到旧 annotation。
 
 同一个 mount namespace 已经登记在**别的 container_id** 下时返回 `409`；如果是
 **同一个容器**重复登记（例如 hook 重试），
@@ -745,22 +775,21 @@ mount namespace 的 PID 一律拒绝，否则等于把整机登记成受托方�
 | 状态 | `code` | 含义 |
 |---:|---|---|
 | `400` | — | `container_id` / `host_pid` / `sandbox_cgroup` 缺失或非法 |
-| `404` | `sandbox_not_found` | 沙盒名不是数据库里的精确沙盒名。**这是"授权的否定答案"**：hook 会放行容器，但**不授予任何权限**（容器里看不到任何 NPU） |
-| `409` | `sandbox_not_active` | 沙盒正在销毁。同 `sandbox_not_found`：放行但无授权 |
+| `404` | `sandbox_not_found` | 沙盒名不是数据库里的精确沙盒名；hook 拒绝本次受管启动 |
+| `409` | `sandbox_not_active` | 沙盒正在销毁或借条对应的沙盒已不可用；hook 拒绝本次受管启动 |
+| `409` | `start_intent_busy` | 该容器的借条正在被另一次登记处理 |
+| `409` | `start_intent_owner_mismatch` | 同一容器有其他属主尚未确认的借条，拒绝沿用旧 annotation |
+| `409` | `start_intent_changed` | 登记期间借条失效或被另一次启动替换 |
+| `500` | `start_intent_rollback_failed` | 借条失效后无法确认本次新登记已撤销，须检查授权记录 |
 | `409` | `docker_container_registered_elsewhere` | 该 mount namespace 已登记给另一个容器 |
 | `409` | `docker_container_same_mount_namespace` | PID 与宿主机共用 mount namespace |
 | `409` | `runtime_identity_changed` | hook 报的 cgroup / mnt ns 与 Worker 读到的不一致 |
 | `409` | `docker_container_pid_invalid` | PID 不存在或已退出 |
 
-hook 的处理分两类（见 `runtime/neubox/docs/runtime-hook.md`）：
-
-* **`sandbox_not_found` / `sandbox_not_active`** → hook 打一行警告后**退 0**，
-  容器照常启动但**没有任何授权**：`container_owner` 里没有它的委托，`open` 全被
-  拒，驱动的 UDA 表是空的（0 张卡）。这条是给"沙盒 release 之后 `docker start`
-  老容器"用的 —— 容器能起来、可写层还在，想要卡得重新 acquire 并重建容器。
-* **其它任何非 2xx（含超时、连不上、5xx、身份冲突 409）** → hook 退非 0，
-  `runc create` 失败、容器不启动。这是 fail-closed：拿不到授权答案时绝不放行
-  （维护窗口里 BPF 可能是拆掉的，放行等于把全部卡送出去）。
+hook 只在 Worker 完成登记并返回 2xx 后放行。**任何非 2xx（包括沙盒不存在、
+正在销毁、超时、连不上或身份冲突）**都让 hook 退非 0，使 `runc create` 失败，
+容器不执行 ENTRYPOINT。已释放沙盒上的旧容器仍然保留可写层；要借新沙盒的卡，
+需从新沙盒中使用 `neubox docker start`，不能直接原生 `docker start`。
 
 ### 登记 / 查询 start 借条（`neubox docker start/restart`）
 
@@ -784,7 +813,8 @@ hook 随后报上来的 register 认领它。**借条不是给用户直接调的
 的后半截；字段、状态码以本节为准，流程与边界见
 [`container-registration.md`](container-registration.md)「start 借条」。
 
-借条按 `(container_id, 属主)` 存，一次性、10 秒过期。沙盒名由 Worker 从 `pid`
+借条按 `(container_id, 属主)` 存，一次性、10 秒过期。同一容器已有未完成或尚未
+被原 CLI 确认的借条时，新的 POST 会被拒绝。沙盒名由 Worker 从 `pid`
 自己反查（`/proc/<pid>/cgroup`），并校验 `pid` 的属主、沙盒属主都等于
 `username` —— 客户端说不出一个不属于自己的沙盒名。POST 成功返回 HTTP `200`：
 
@@ -807,11 +837,16 @@ POST 的错误响应：
 | `409` | `not_in_sandbox` | PID 不在任何沙盒里，没有可借的东西 |
 | `409` | `sandbox_owner_mismatch` | PID 所在的沙盒不是该用户的 |
 | `409` | `sandbox_not_active` | 沙盒正在销毁 |
+| `409` | `start_intent_busy` | 同一容器已有待启动、登记中或尚未由原 CLI 确认的借条 |
+| `409` | `container_still_bound` | 容器仍在运行并持有已有沙盒登记 |
+| `409` | `container_binding_unknown` | 无法确认已有登记是否仍存活；为避免误借卡而拒绝 |
 
-GET 返回同一形状，`state` 为 `pending`（还没被认领）、`consumed`（已认领，说明容器
-真的绑上了那张借条里的沙盒）或 `null`（没有借条 / 已过期）。同一个字段校验照做，
-所以查询也要带 `pid`。`neubox docker start` 启动后轮询它，`consumed` 才算拿到卡；
-没认领就打印一行警告（容器照常起来，只是零卡），不改退出码。
+GET 返回同一形状，`state` 为 `pending`（未登记完成，包括已认领但登记仍在进行）、
+`consumed`（完整登记成功）或 `null`（没有借条 / 已过期）。同一个字段校验照做，
+所以查询也要带 `pid`。借条只有在完整登记成功后才变为 `consumed`；借出它的
+CLI 用原来的 `pid` 查询到这个状态时，Worker 将其标为已确认。此后容器退出且
+旧登记不再存活，才能再次借卡。`neubox docker start` 启动后轮询它，仅在
+`consumed` 且返回的沙盒与本次预期一致时确认借卡成功；否则返回非零并尝试停止容器。
 
 ### 查询沙盒
 

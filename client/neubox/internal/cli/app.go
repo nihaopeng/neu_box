@@ -22,6 +22,7 @@ type config struct {
 
 type app struct {
 	config          config
+	in              io.Reader
 	out             io.Writer
 	errOut          io.Writer
 	jsonOutput      bool
@@ -36,6 +37,7 @@ type app struct {
 	execFn          ExecFn
 	outputFn        OutputFn
 	runFn           RunFn
+	startFn         StartFn
 }
 
 // Run executes one CLI invocation and returns its process exit code.
@@ -47,6 +49,7 @@ func newApp(out, errOut io.Writer) *app {
 	cfg := configFromEnvironment()
 	return &app{
 		config:          cfg,
+		in:              os.Stdin,
 		out:             out,
 		errOut:          errOut,
 		worker:          api.NewClient(cfg.workerURL),
@@ -59,6 +62,7 @@ func newApp(out, errOut io.Writer) *app {
 		execFn:          defaultExec,
 		outputFn:        defaultOutput,
 		runFn:           defaultRun,
+		startFn:         defaultStart,
 	}
 }
 

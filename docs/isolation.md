@@ -140,11 +140,11 @@ bundle 无关。
 | 容器自己退出 | pidfd 事件唤醒收尸线程，撤登记、删记录；**沙盒的设备不释放** | 死 ns 的表没人能用 |
 | `POST /sandbox/release` | 撤授权 → `docker stop` → 等容器真的退出 → 删记录/放 pin → native destroy 清 cgroup 与预留 | 容器停着（**不删**，可写层留着），卡回池 |
 | release 失败（容器不退） | destroy 返回失败、沙盒保留 `DESTROYING` 等收尸重试，**卡不放回** | 宁可少发一张，不发一张还在被用的 |
-| `docker stop` 后 `docker start` | start 重走整条 create → hook 再登记一次；annotation 还是**沙盒名**，精确匹配 | 沙盒还在 → 幂等登记、照旧带卡；沙盒没了 → 404 → **放行但零卡**（见下） |
+| `docker stop` 后 `docker start` | start 重走整条 create → hook 再登记一次；annotation 还是**沙盒名**，精确匹配 | 沙盒还在 → 重新登记；沙盒没了 → 404 → **拒绝启动** |
 | `docker exec` | 不走 hook（不是 create），复用同一个 mnt ns 的委托与同一张表 | 它就是当初登记成功的那份授权，不多不少 |
 | 容器没带 annotation | wrapper 不注入 hook，容器照常起 | 没有委托 → open 全拒、表为空（fail-closed） |
-| **`docker start` 一个沙盒已释放的老容器** | Worker 明确回答"没有这个沙盒"（404/409）→ hook **无授权放行** | 容器能起来（可写层还在），但一张卡都拿不到；要卡得重新 acquire 并重建容器 |
-| 其它任何登记失败（连不上 Worker / 超时 / 5xx / 身份冲突 409） | hook 退非 0 → `runc create` 失败 | 绝不降级放行：拿不到授权答案时，维护窗口里 BPF 可能是拆掉的，放行等于把全部卡送出去 |
+| **`docker start` 一个沙盒已释放的老容器** | Worker 回答沙盒不存在或不可用（404/409）→ hook 拒绝 | 容器仍停止，可写层保留；在新沙盒中用 `neubox docker start` 借卡 |
+| 其它任何登记失败（连不上 Worker / 超时 / 5xx / 身份冲突 409） | hook 退非 0 → `runc create` 失败 | 不降级放行：维护窗口里 BPF 可能已拆除，放行可能暴露设备 |
 | annotation 指向不存在的沙盒 | hook 404 → 退非 0 → `runc create` 失败 | 容器起不来 |
 | worker 重启（崩溃后拉起） | 排队任务重新入队；**running 任务标 failed，任务沙盒连 cgroup 一起清**；acquire 沙盒保留；**名下还活着的容器一律停掉（不删）+ 撤绑定** | 重启不续授权：容器要 `docker start` 重新登记，任务要重新提交 |
 | `--cap-add=ALL` / `--privileged` | runtime 剪掉 `CAP_AUDIT_READ` → 非 admin → 走"占到的卡" | 表 = 沙盒预留的卡 |
@@ -158,9 +158,8 @@ bundle 无关。
    `container-registration.md`），否则 destroy 能把授权从两次操作之间抽走。
 4. **释放沙盒 = 真的把容器停掉（进程退光），但不要删它**：撤授权只挡新 open，
    进程还在就等于没撤；删掉又会连可写层一起毁掉，用户还要 commit / cp 呢。
-5. **容器里第一个 NPU 进程之前必须有委托** —— 这是 hook 存在的唯一理由。
-   唯一的例外是"授权的否定答案"（沙盒不存在 / 正在销毁）：那时放行是安全的，
-   因为闸门还在、容器拿不到任何卡；"拿不到答案"（连不上、超时、5xx）不算例外。
+5. **受管容器的第一个 NPU 进程之前必须完成委托登记**。Worker 返回非 2xx
+   或无法连接时，hook 都拒绝启动，不能留下一个已声明受管却未登记的容器。
 6. **容器不能是 admin**：能力位守卫是 ③ 唯一能被我们控制的那一半。
 7. **重启不续授权**：容器退出监听（mnt ns fd + pidfd）是内存态，重启后全丢；
    驱动那张按 mnt ns 缓存的表却还在。所以启动时把还活着的登记容器停掉、撤绑定
@@ -172,8 +171,9 @@ bundle 无关。
 
 ## 已知边界（不是 bug，是当前口径）
 
-* `--runtime=runc` 完全绕过本仓库这一套（wrapper 没被调用）；要用这套隔离就必须
-  用默认 runtime。
+* 原生 Docker 的 `--runtime=runc` 可绕过本仓库的 runtime hook 和能力位守卫；
+  使用 Docker socket 的账号及 Worker API 调用方必须处于可信边界。当前 Worker
+  API 没有认证，不能把 Docker 参数或 annotation 当作跨不可信用户的授权凭据。
 * 驱动那张表**不会**在容器退出时同步清掉；残留的死 ns 行只能等 idle 回收，读
   `/proc/uda/namespace_node` 可以催。残留的行本身无害（ns 里没有进程），但会
   在 `/proc/uda/udevice` 的 share 列表里留下 `128` 之类的占位。
@@ -193,7 +193,7 @@ bundle 无关。
 |---|---|
 | 带 annotation → 登记 → 容器里能开自己沙盒的卡 | 33 |
 | 不带 annotation → 一张卡都拿不到 | 34 |
-| annotation 指向不存在的沙盒 → 容器起得来但零卡（35 验用户态可见性，83 验驱动表） | 35、83 |
+| annotation 指向不存在的沙盒 → hook 拒绝启动业务进程 | 35、83 |
 | 容器退出只注销登记、不释放沙盒设备 | 38 |
 | 容器重启后重复登记幂等 | 39 |
 | release → 名下容器被一并停掉、不删（含借出的终端不被误杀） | 42 |
@@ -214,10 +214,10 @@ bundle 无关。
 | 容器里只开得到自己沙盒的卡（空闲卡也不行） | 69 |
 | `neubox release` 停掉 client 起的容器（不删） | 70 |
 | 沙盒还在时 `docker stop` → `docker start`：重新登记、卡照旧能用 | 73 |
-| stop 之后再 release：容器留着（可写层不丢），start 起得来但零卡 | 74 |
-| 停着的老容器不挡路：start 起来也零卡，同一张卡照常交给下一个沙盒 | 75 |
+| stop 之后再 release：容器留着（可写层不丢），原生 start 被拒绝 | 74 |
+| 停着的老容器不挡路：原生 start 被拒绝，同一张卡照常交给下一个沙盒 | 75 |
 | 跨 shell：`neubox docker start` 把**当前**沙盒借给老容器，同一个容器（annotation 没改）重新拿到卡 | 84 |
-| 不在沙盒里的 `neubox docker start`：容器照样起来，但零卡且命令行明说 | 85 |
+| 不在沙盒里的 `neubox docker start`：命令失败，容器保持停止 | 85 |
 
 调度的队列语义（`test_scheduling.py`）：
 
