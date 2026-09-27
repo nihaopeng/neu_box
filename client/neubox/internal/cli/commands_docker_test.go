@@ -29,6 +29,47 @@ func recordExec(application *app) *execCall {
 	return call
 }
 
+func TestDockerShellAcquiresOwnProcessRunsForegroundAndReleases(t *testing.T) {
+	var acquired terminalAcquireRequest
+	var released map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/sandbox/acquire":
+			decodeRequest(t, request, &acquired)
+			writeJSON(t, writer, http.StatusCreated, map[string]any{
+				"sandbox_name": "sbx_yuxd_222.slice", "devices": []string{"235:0", "235:1"},
+			})
+		case "/sandbox/release":
+			decodeRequest(t, request, &released)
+			writeJSON(t, writer, http.StatusOK, map[string]any{})
+		default:
+			t.Errorf("unexpected request: %s", request.URL.Path)
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	application, _, errOut := testApplication(server.URL)
+	var dockerArgv []string
+	application.runFn = func(_ string, argv []string, _ []string) (int, error) {
+		dockerArgv = append([]string(nil), argv...)
+		return 0, nil
+	}
+	if code := application.run([]string{
+		"docker", "shell", "--device-num", "2", "--", "ubuntu", "bash",
+	}); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if acquired.PID != 222 || acquired.DeviceNum != 2 {
+		t.Fatalf("acquire should target CLI process: %+v", acquired)
+	}
+	if released["sandbox_name"] != "sbx_yuxd_222.slice" {
+		t.Fatalf("sandbox not released: %+v", released)
+	}
+	if got := strings.Join(dockerArgv, " "); !strings.Contains(got, "run --annotation sandbox_cgroup=sbx_yuxd_222.slice --rm -it ubuntu bash") {
+		t.Fatalf("docker argv=%q", dockerArgv)
+	}
+}
+
 func TestDockerRunInjectsAnnotationForOwnSandbox(t *testing.T) {
 	var requestedPID string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

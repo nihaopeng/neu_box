@@ -139,9 +139,15 @@ class DockerCommandExecutor(CommandBackend):
         image_ref = str(self.target.get('image')).strip()
         command = str(self.task.get('command') or '')
         environment = dict(self.target.get('env') or {})
+        binds = [
+            f"{mount['source']}:{mount['target']}:"
+            f"{'ro' if mount['read_only'] else 'rw'}"
+            for mount in self.target.get('mounts') or []
+        ]
 
         host_config = client.api.create_host_config(
             devices=devices.node_paths() or None,
+            binds=binds or None,
             **self._limits(),
         )
         # annotation 是 runtime hook 唯一的输入，键和值都是跨仓库契约

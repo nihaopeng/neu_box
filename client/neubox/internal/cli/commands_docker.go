@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,8 @@ func (a *app) runDocker(args []string) int {
 	}
 	switch args[0] {
 	case "run":
+	case "shell":
+		return a.runDockerShell(args[1:])
 	case "start":
 		return a.runDockerStart(args[1:])
 	case "help", "-h", "--help":
@@ -69,6 +72,69 @@ func (a *app) runDocker(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// runDockerShell owns a temporary sandbox for one foreground Docker session.
+// The existing docker run/start commands remain available for long-lived sandboxes.
+func (a *app) runDockerShell(args []string) int {
+	if a.jsonOutput {
+		return a.usageError("docker shell 是交互命令，不支持 --json")
+	}
+	options := acquireOptions{}
+	separator := -1
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "--" {
+			separator = index
+			break
+		}
+		if handled, err := consumeResourceOption(args, &index, &options.resourceOptions); err != nil {
+			return a.usageError(err.Error())
+		} else if !handled {
+			return a.usageError("docker shell 的 Docker 参数请放在 -- 后面")
+		}
+	}
+	if separator < 0 || separator == len(args)-1 {
+		return a.usageError("用法: neubox docker shell [资源选项] -- [docker run 参数] IMAGE [CMD]")
+	}
+	if err := validateResourceOptions(&options.resourceOptions); err != nil {
+		return a.usageError(err.Error())
+	}
+	for _, argument := range args[separator+1:] {
+		if argument == "-d" || argument == "--detach" || strings.HasPrefix(argument, "--detach=") {
+			return a.usageError("docker shell 只支持前台容器；后台容器请先 acquire 再 docker run")
+		}
+	}
+	dockerBinary, err := a.lookPath("docker")
+	if err != nil {
+		a.printError("docker_not_found", "PATH 里找不到 docker 命令")
+		return 1
+	}
+	// Only this CLI process enters the temporary sandbox. The user's shell stays
+	// where it was, and children of the CLI inherit its cgroup while it runs.
+	options.pid = a.getPID()
+	options.pidSet = true
+	if code := a.runTerminalAcquireWithMode(options, true); code != 0 {
+		return code
+	}
+	sandboxName := a.acquiredSandbox
+	if sandboxName == "" {
+		return a.internalError("invalid_worker_response", errors.New("acquire 成功但没有沙盒名"))
+	}
+	dockerArgs := append([]string{"--rm", "-it"}, args[separator+1:]...)
+	argv := append([]string{dockerBinary}, dockerargs.BuildDockerArgs(sandboxName, dockerArgs)...)
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
+	status, runErr := a.runFn(dockerBinary, argv, os.Environ())
+	if runErr != nil {
+		a.printError("docker_exec_failed", fmt.Sprintf("启动 docker 失败: %v", runErr))
+		status = 1
+	}
+	if releaseCode := a.runRelease([]string{sandboxName}); releaseCode != 0 && status == 0 {
+		return releaseCode
+	}
+	return status
 }
 
 // runDockerStart 是 `neubox docker start`：先把这个 shell 的沙盒借给容器，
@@ -113,7 +179,7 @@ func (a *app) runDockerStart(args []string) int {
 	return a.confirmStartBinding(container, containerID, sandboxName)
 }
 
-// lendSandbox 尽力借沙盒：借到了返回 ``(容器 ID, 沙盒名)``，借不到返回空串并
+// lendSandbox 尽力借沙盒：借到了返回容器 ID 和沙盒名，借不到返回空串并
 // 打一行警告。容器找不到、不在沙盒里、沙盒正在销毁，都只是"没借到"。
 func (a *app) lendSandbox(dockerBinary, container string) (string, string) {
 	containerID, err := a.inspectContainerID(dockerBinary, container)
@@ -309,12 +375,18 @@ func (a *app) resolveOwnSandbox() (string, int) {
 
 func (a *app) printDockerHelp() {
 	fmt.Fprint(a.out, `neubox docker run   — 在沙盒里启动新容器
+neubox docker shell — 一次性前台会话，自动申请和释放设备
 neubox docker start — 把已停的容器拉起来，并把当前沙盒借给它
 
 用法:`+"\n    "+dockerRunUsage+`
+    neubox docker shell [资源选项] -- [docker run 参数] IMAGE [CMD]
     `+dockerStartUsage+`
 
 说明:
+    docker shell 可直接运行：neubox docker shell --device-num 2 -- ubuntu bash。
+    它自动添加 --rm -it；退出容器后释放沙盒，当前宿主 shell 不会进入沙盒。
+    需要保留容器时，先 acquire，再用 docker run/start。
+
     docker run 的参数一个不改，只在最前面补一行 annotation：
         neubox docker run --rm -it ubuntu bash
       = docker run --annotation sandbox_cgroup=<沙盒名> --rm -it ubuntu bash

@@ -15,9 +15,10 @@ func (a *app) printHelpTo(writer io.Writer) {
 用法:
     neubox [--json] acquire [选项...]
     neubox [--json] submit [选项...] -- <command> [args...]
-    neubox [--json] release <sandbox_name>
+    neubox [--json] release [sandbox_name]
     neubox [--json] cancel <id> [--kind task|acquire]
     neubox [--json] docker run <docker 参数...>
+    neubox docker shell [资源选项] -- [docker run 参数] IMAGE [CMD]
     neubox [--json] docker start <容器> [docker 参数...]
     neubox [--json] {list|status|check|join|result} [参数]
     neubox [--json] tasks [--all] [--since 4h]
@@ -37,11 +38,13 @@ func (a *app) printHelpTo(writer io.Writer) {
 命令说明:
     acquire                同步申请终端沙盒；返回成功时当前 shell 已进入沙盒
     submit                 异步提交命令任务；返回成功只表示任务已进入队列，
-                           需使用 wait <task_id> 跟踪，或用 result 查询快照
+                           可用 --wait 直接跟踪，或事后使用 wait <task_id>
     wait <task_id>          增量跟踪日志直到 completed/failed
     result <task_id>        查询异步任务的当前状态、执行结果和完整日志
     docker run              透传 docker run，自动补上沙盒 annotation；
                            没有自己的选项，参数一个不改地交给 docker
+    docker shell            为前台 Docker 会话自动申请、释放沙盒；
+                           自动添加 --rm -it，不搬动当前宿主 shell
     docker start            把停着的容器拉起来，并把当前 shell 的沙盒借给它
                            （容器名放最前面，docker 的选项跟在后面）
 
@@ -63,10 +66,14 @@ submit 选项:
     --cpu 4                CPU 核数，0 表示不限
     --mem 8                内存 GB，0 表示不限
     --priority 1           队列优先级，数值越大越先执行；0 表示普通
+    --wait                 提交后直接跟踪日志和退出状态
     --image IMAGE          创建一次性 Docker 目标
-    --workdir PATH         Docker 目标的工作目录
+    --workdir PATH         工作目录；Host 默认提交时的当前目录
     --container-user USER  Docker 目标内的用户
-    --env KEY=VALUE        Docker 目标的环境变量，可重复
+    --env KEY[=VALUE]      显式传入环境变量，可重复；不写 VALUE 则读取本地值
+    --project              Docker：挂载当前目录到 /workspace（可写）并在其中运行
+    --mount SRC:DST[:ro|rw] Docker：挂载已有路径，默认只读，可重复
+    --output HOST[:DST]    Docker：创建并挂载可写输出目录，默认 DST=/outputs
     --command "..."        命令字符串；也可将命令放在 -- 后
 
 其他命令:
@@ -87,13 +94,16 @@ submit 选项:
     neubox acquire --devices 1,3 --cpu 4 --mem 8
     neubox submit --device 1 -- npu-smi info
     neubox submit --device-num 1 --priority 1 -- python train.py
-    neubox submit --device 1 --image training:v1 --workdir /workspace -- python train.py
+    neubox submit --wait --device-num 1 -- python train.py
+    neubox submit --image training:v1 --project --output ./runs/exp1 --wait -- python train.py
     neubox wait 7c65d5ac21f4
     neubox tasks --all           # 含较早结束的任务
+    neubox release                # 释放当前 shell 的沙盒
     neubox release sbx_yuxd_12345.slice
     neubox cancel 7c65d5ac21f4            # 取消排队中/运行中的任务
     neubox cancel 9f0a1b2c3d4e --kind acquire
     neubox docker run --rm -it ubuntu bash
+    neubox docker shell --device-num 2 -- ubuntu bash
     neubox docker start my-container
 
 环境变量:
@@ -109,6 +119,10 @@ docker start 拿卡靠的不是 annotation（那是建容器时写死的、改�
 先存的一张借条：把当前 shell 所在沙盒借给这个容器，10 秒内有效、一次性。所以
 跨 shell 换沙盒继续用同一个容器要走 neubox docker start；直接敲原生
 docker start 没有借条，容器起得来但零卡。
+
+submit 的 Host 目标从提交时的工作目录运行；只有 --env 显式选择的变量会从
+提交终端传入。Docker --project/--mount/--output 使用 Worker 节点上的宿主路径，
+不上传文件；输出目录是可写 bind mount，容器结束后文件留在宿主机。
 
 cancel 的语义：排队中的条目被摘出队列（任务留痕为 cancelled，记录与日志保留）；
 运行中的任务发取消信号；已经拿到卡的 acquire 就地释放，不需要再补一次 release。

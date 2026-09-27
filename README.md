@@ -147,11 +147,17 @@ neubox check
 
 # 当前终端独占两张设备卡
 neubox acquire --device-num 2
-neubox release <sandbox_name>
+neubox release
+
+# 一条命令进入临时 Docker 终端，退出后自动释放
+neubox docker shell --device-num 2 -- ubuntu bash
 
 # 提交四卡任务并增量跟踪日志
-neubox submit --device-num 4 --priority 1 -- python train.py
-neubox wait <task_id>
+neubox submit --device-num 4 --priority 1 --wait -- python train.py
+
+# 项目和输出保留在宿主机
+neubox submit --image training:v1 --project --output ./runs/exp1 \
+  --wait -- python train.py
 ```
 
 完整参数见 [客户端说明](client/neubox/README.md)。

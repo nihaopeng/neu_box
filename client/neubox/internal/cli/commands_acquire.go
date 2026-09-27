@@ -87,6 +87,11 @@ func parseAcquireOptions(args []string) (acquireOptions, error) {
 }
 
 func (a *app) runTerminalAcquire(options acquireOptions) int {
+	return a.runTerminalAcquireWithMode(options, false)
+}
+
+func (a *app) runTerminalAcquireWithMode(options acquireOptions, autoRelease bool) int {
+	a.acquiredSandbox = ""
 	shellPID := a.getPPID()
 	if options.pidSet {
 		shellPID = options.pid
@@ -184,6 +189,7 @@ func (a *app) runTerminalAcquire(options acquireOptions) int {
 		}
 		return 130
 	}
+	a.acquiredSandbox = response.SandboxName
 	if a.jsonOutput {
 		_ = printJSON(a.out, raw)
 		return 0
@@ -196,8 +202,12 @@ func (a *app) runTerminalAcquire(options acquireOptions) int {
 	fmt.Fprintf(a.out, "    sandbox: %s\n", response.SandboxName)
 	fmt.Fprintf(a.out, "    pid: %d\n", shellPID)
 	fmt.Fprintf(a.out, "    devices: %s\n", devices)
-	fmt.Fprintf(a.out, "    release: neubox release %s\n", response.SandboxName)
-	fmt.Fprintln(a.out, "    docker: neubox docker run -- <docker run 参数>")
+	if autoRelease {
+		fmt.Fprintln(a.out, "    Docker 会话结束后自动释放")
+	} else {
+		fmt.Fprintln(a.out, "    release: neubox release")
+		fmt.Fprintln(a.out, "    docker: neubox docker run -- <docker run 参数>")
+	}
 	return 0
 }
 

@@ -69,6 +69,7 @@ async def _execute_in_sandbox(
     sandbox_name: str,
     timeout: int | None = None,
     username: str = '',
+    target: dict | None = None,
 ) -> dict:
     """异步执行 Host 命令；输出写入任务日志，不创建读流线程。"""
     timeout = command_timeout() if timeout is None else timeout
@@ -99,7 +100,8 @@ async def _execute_in_sandbox(
             logger.warning('读取 Host stdout 流异常: %s', exc)
 
     try:
-        environment = {**os.environ, 'PYTHONUNBUFFERED': '1'}
+        target = target or {}
+        environment = {**os.environ, **(target.get('env') or {}), 'PYTHONUNBUFFERED': '1'}
         if username:
             environment['HOME'] = target_dir
         # The gate shell must not source a caller-controlled BASH_ENV before
@@ -125,7 +127,7 @@ async def _execute_in_sandbox(
                 'user': target_uid,
                 'group': target_gid,
                 'extra_groups': os.getgrouplist(username, target_gid),
-                'cwd': target_dir,
+                'cwd': target.get('workdir') or target_dir,
             })
         proc = await asyncio.create_subprocess_exec(
             # Stop before evaluating the command.  The parent can then join
@@ -215,6 +217,7 @@ class HostCommandExecutor(CommandBackend):
         return await _execute_in_sandbox(
             self.task['command'], self.sandbox_name, timeout,
             self.task['user_id'],
+            self.task.get('target') or self.task.get('target_spec'),
         )
 
     def cancel(self):

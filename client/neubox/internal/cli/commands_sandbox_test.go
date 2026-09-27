@@ -29,6 +29,28 @@ func TestReleaseSendsSandboxNameAndOwnPID(t *testing.T) {
 	}
 }
 
+func TestReleaseWithoutNameUsesCurrentShell(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		decodeRequest(t, r, &received)
+		writeJSON(t, w, 200, map[string]any{})
+	}))
+	defer server.Close()
+	application, _, errOut := testApplication(server.URL)
+	application.readFile = func(path string) ([]byte, error) {
+		if path != "/proc/111/cgroup" {
+			t.Fatalf("unexpected path: %s", path)
+		}
+		return []byte("0::/sandbox_sbx_yuxd_43210.slice\n"), nil
+	}
+	if rc := application.run([]string{"release"}); rc != 0 {
+		t.Fatalf("rc=%d %s", rc, errOut.String())
+	}
+	if received["sandbox_name"] != "sbx_yuxd_43210.slice" {
+		t.Fatalf("payload=%v", received)
+	}
+}
+
 func TestHostStatusReadsProcWithoutExternalCommands(t *testing.T) {
 	const sandboxName = "sbx_yuxd_43210.slice"
 	application, out, errOut := testApplication("http://127.0.0.1:1")
@@ -44,5 +66,32 @@ func TestHostStatusReadsProcWithoutExternalCommands(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "sandbox: "+sandboxName) {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestHostStatusShowsAllocatedDevicesAndReleaseHint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/sandbox/status" || r.URL.Query().Get("pid") != "111" {
+			t.Errorf("unexpected status request: %s", r.URL.String())
+		}
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"sandbox_name": "sbx_yuxd_111.slice",
+			"sandbox": map[string]any{
+				"name": "sbx_yuxd_111.slice", "devices": []string{"235:0", "235:1"},
+				"state": "active",
+			},
+		})
+	}))
+	defer server.Close()
+	application, out, errOut := testApplication(server.URL)
+	application.readFile = func(string) ([]byte, error) {
+		return []byte("0::/sandbox_sbx_yuxd_111.slice\n"), nil
+	}
+	if code := application.run([]string{"status"}); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "devices: 235:0,235:1") ||
+		!strings.Contains(out.String(), "release: neubox release") {
+		t.Fatalf("unexpected status output: %s", out.String())
 	}
 }

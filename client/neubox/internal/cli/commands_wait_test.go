@@ -91,3 +91,25 @@ func TestWaitReturnsFailureForFailedTask(t *testing.T) {
 		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
 	}
 }
+
+func TestWaitReportsCancelledTask(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasSuffix(request.URL.Path, "/log") {
+			writeJSON(t, writer, http.StatusOK, map[string]any{
+				"data": "", "offset": 0, "total_size": 0,
+			})
+			return
+		}
+		writeJSON(t, writer, http.StatusOK, map[string]any{
+			"task_id": "cancel1", "status": "cancelled",
+		})
+	}))
+	defer server.Close()
+	application, _, errOut := testApplication(server.URL)
+	if code := application.run([]string{"wait", "cancel1"}); code != 130 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "finished: cancelled") {
+		t.Fatalf("unexpected stderr: %s", errOut.String())
+	}
+}

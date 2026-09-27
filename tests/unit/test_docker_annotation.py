@@ -82,6 +82,29 @@ def test_start_container_uses_no_high_level_run_helper(monkeypatch, tmp_path):
     assert client.api.created == 'image:tag'
 
 
+def test_start_container_mounts_project_and_output(monkeypatch, tmp_path):
+    project = tmp_path / 'project'
+    output = tmp_path / 'output'
+    project.mkdir()
+    output.mkdir()
+    executor = _executor(monkeypatch, tmp_path, target={
+        'image': 'image:tag',
+        'workdir': '/workspace',
+        'mounts': [
+            {'source': str(project), 'target': '/workspace', 'read_only': True},
+            {'source': str(output), 'target': '/outputs', 'read_only': False},
+        ],
+    })
+    client = _Client()
+
+    executor._start_container(client)
+
+    assert client.api.host_options['binds'] == [
+        f'{project}:/workspace:ro', f'{output}:/outputs:rw',
+    ]
+    assert client.api.options['working_dir'] == '/workspace'
+
+
 def test_start_container_ignores_sandbox_named_by_the_target(monkeypatch, tmp_path):
     """沙盒归属由 Worker 分配，不接受请求方指定。"""
     executor = _executor(

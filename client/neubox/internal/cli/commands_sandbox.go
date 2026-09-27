@@ -4,18 +4,31 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/neusbox/neu_box/client/neubox/internal/api"
 )
 
 func (a *app) runRelease(args []string) int {
-	if len(args) != 1 {
-		return a.usageError("用法: neubox release <sandbox_name>")
+	if len(args) > 1 {
+		return a.usageError("用法: neubox release [sandbox_name]")
 	}
-	sandboxName := strings.TrimSpace(args[0])
+	sandboxName := ""
+	if len(args) == 1 {
+		sandboxName = strings.TrimSpace(args[0])
+	} else {
+		shellPID := a.getPPID()
+		raw, err := a.readFile(fmt.Sprintf("/proc/%d/cgroup", shellPID))
+		if err != nil {
+			return a.internalError("cgroup_read_failed", errors.New("无法读取当前 shell 的 cgroup 信息"))
+		}
+		sandboxName = sandboxNameFromCgroup(raw)
+	}
 	if sandboxName == "" {
-		return a.usageError("sandbox_name 不能为空")
+		return a.usageError("当前 shell 不在沙盒中；如需释放其他沙盒，请指定 sandbox_name")
 	}
 	// 报上自己的 host PID：neubox 是 acquire 借出去的那个 shell fork 出来的
 	// 子进程，cgroup 成员身份随 fork 继承 —— 它住在沙盒 cgroup 里却没有
@@ -48,6 +61,7 @@ type sandboxRecord struct {
 	CPU     int      `json:"cpu"`
 	Mem     string   `json:"mem"`
 	Devices []string `json:"devices"`
+	State   string   `json:"state"`
 }
 
 type sandboxListResponse struct {
@@ -114,19 +128,45 @@ func (a *app) runStatus(args []string) int {
 	if err != nil {
 		return a.internalError("cgroup_read_failed", errors.New("无法读取 cgroup 信息"))
 	}
-	return a.printShellStatus(shellPID, sandboxNameFromCgroup(raw))
+	sandboxName := sandboxNameFromCgroup(raw)
+	var details *sandboxRecord
+	if sandboxName != "" {
+		query := url.Values{"pid": []string{strconv.Itoa(shellPID)}}
+		// Local cgroup status remains useful while the Worker is unavailable.
+		// Resource details are optional, so do not wait for the normal 30s timeout.
+		worker := *a.worker
+		httpClient := *a.worker.HTTP
+		httpClient.Timeout = 2 * time.Second
+		worker.HTTP = &httpClient
+		status, body, err := worker.Request(http.MethodGet, "/sandbox/status", query, nil)
+		if err == nil && status >= 200 && status < 300 {
+			var response struct {
+				SandboxName string         `json:"sandbox_name"`
+				Sandbox     *sandboxRecord `json:"sandbox"`
+			}
+			if api.DecodeJSON(body, &response) == nil && response.SandboxName == sandboxName {
+				details = response.Sandbox
+			}
+		}
+	}
+	return a.printShellStatus(shellPID, sandboxName, details)
 }
 
-func (a *app) printShellStatus(shellPID int, sandboxName string) int {
+func (a *app) printShellStatus(shellPID int, sandboxName string, details *sandboxRecord) int {
 	if a.jsonOutput {
 		var sandboxValue any
 		if sandboxName != "" {
 			sandboxValue = sandboxName
 		}
-		_ = printJSONValue(a.out, map[string]any{
+		payload := map[string]any{
 			"pid":     shellPID,
 			"sandbox": sandboxValue,
-		})
+		}
+		if details != nil {
+			payload["devices"] = details.Devices
+			payload["state"] = details.State
+		}
+		_ = printJSONValue(a.out, payload)
 		return 0
 	}
 	fmt.Fprintln(a.out, "[neubox] Shell 状态")
@@ -135,6 +175,13 @@ func (a *app) printShellStatus(shellPID int, sandboxName string) int {
 		fmt.Fprintln(a.out, "    sandbox: none")
 	} else {
 		fmt.Fprintf(a.out, "    sandbox: %s\n", sandboxName)
+		if details != nil {
+			fmt.Fprintf(a.out, "    devices: %s\n", strings.Join(details.Devices, ","))
+			if details.State != "" {
+				fmt.Fprintf(a.out, "    state: %s\n", details.State)
+			}
+		}
+		fmt.Fprintln(a.out, "    release: neubox release")
 	}
 	return 0
 }

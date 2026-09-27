@@ -24,6 +24,7 @@ func testApplication(serverURL string) (*app, *bytes.Buffer, *bytes.Buffer) {
 		worker:          api.NewClient(serverURL),
 		getPID:          func() int { return 222 },
 		getPPID:         func() int { return 111 },
+		getwd:           func() (string, error) { return "/home/yuxd/project", nil },
 		insideContainer: func() bool { return false },
 		readFile:        os.ReadFile,
 		// 测试里不碰真的 docker：路径写死，exec 只当"成功替换进程"。

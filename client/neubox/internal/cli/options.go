@@ -26,11 +26,15 @@ type acquireOptions struct {
 type submitOptions struct {
 	resourceOptions
 	priority      int
+	wait          bool
 	command       string
 	image         string
 	workdir       string
 	containerUser string
 	environment   map[string]string
+	mounts        []string
+	project       bool
+	output        string
 }
 
 func consumeResourceOption(args []string, index *int, options *resourceOptions) (bool, error) {

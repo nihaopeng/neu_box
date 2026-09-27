@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 from typing import Any
@@ -83,6 +84,37 @@ def _normalize_environment(value: Any) -> dict[str, str]:
     return result
 
 
+def _normalize_mounts(value: Any) -> list[dict]:
+    if value in (None, []):
+        return []
+    if not isinstance(value, list) or len(value) > 32:
+        raise TargetValidationError('target.mounts 必须是最多 32 项的数组')
+    mounts = []
+    destinations = set()
+    for index, mount in enumerate(value):
+        if not isinstance(mount, dict):
+            raise TargetValidationError(f'target.mounts[{index}] 必须是对象')
+        _reject_unknown(mount, {'source', 'target', 'read_only'})
+        source = mount.get('source')
+        target = mount.get('target')
+        read_only = mount.get('read_only', True)
+        if not isinstance(source, str) or not source.startswith('/') or '\x00' in source or ':' in source:
+            raise TargetValidationError(f'target.mounts[{index}].source 必须是宿主机绝对路径')
+        source = os.path.normpath(source)
+        if not os.path.exists(source):
+            raise TargetValidationError(f'挂载源不存在: {source}')
+        if not isinstance(target, str) or not target.startswith('/') or '\x00' in target or ':' in target:
+            raise TargetValidationError(f'target.mounts[{index}].target 必须是容器内绝对路径')
+        target = posixpath.normpath(target)
+        if target in destinations:
+            raise TargetValidationError(f'重复的容器挂载路径: {target}')
+        if not isinstance(read_only, bool):
+            raise TargetValidationError(f'target.mounts[{index}].read_only 必须是布尔值')
+        destinations.add(target)
+        mounts.append({'source': source, 'target': target, 'read_only': read_only})
+    return mounts
+
+
 def normalize_execution_target(raw: Any) -> dict:
     """校验并返回可写入 SQLite 的执行目标。"""
     if raw in (None, {}):
@@ -98,10 +130,14 @@ def normalize_execution_target(raw: Any) -> dict:
             'target.type 必须是 host 或 docker；在已有容器里执行已不再支持'
         )
     if target_type == TARGET_HOST:
-        _reject_unknown(raw, {'type'})
-        return {'type': TARGET_HOST}
+        _reject_unknown(raw, {'type', 'workdir', 'env'})
+        return {
+            'type': TARGET_HOST,
+            'workdir': _normalize_workdir(raw.get('workdir')),
+            'env': _normalize_environment(raw.get('env')),
+        }
 
-    _reject_unknown(raw, {'type', 'image', 'workdir', 'env', 'user'})
+    _reject_unknown(raw, {'type', 'image', 'workdir', 'env', 'user', 'mounts'})
     image = raw.get('image')
     if not isinstance(image, str):
         raise TargetValidationError('docker 目标必须提供 target.image')
@@ -114,6 +150,7 @@ def normalize_execution_target(raw: Any) -> dict:
         'workdir': _normalize_workdir(raw.get('workdir')),
         'env': _normalize_environment(raw.get('env')),
         'user': _normalize_user(raw.get('user')),
+        'mounts': _normalize_mounts(raw.get('mounts')),
     }
 
 

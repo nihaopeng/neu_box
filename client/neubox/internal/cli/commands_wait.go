@@ -65,6 +65,9 @@ func (a *app) runWait(args []string) int {
 		case "failed":
 			a.printWaitResult(response)
 			return 1
+		case "cancelled":
+			a.printWaitResult(response)
+			return 130
 		case "queued", "running":
 			// Keep following the same task.
 		default:

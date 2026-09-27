@@ -25,9 +25,11 @@ type app struct {
 	out             io.Writer
 	errOut          io.Writer
 	jsonOutput      bool
+	acquiredSandbox string
 	worker          *api.Client
 	getPID          func() int
 	getPPID         func() int
+	getwd           func() (string, error)
 	insideContainer func() bool
 	readFile        func(string) ([]byte, error)
 	lookPath        LookPathFn
@@ -50,6 +52,7 @@ func newApp(out, errOut io.Writer) *app {
 		worker:          api.NewClient(cfg.workerURL),
 		getPID:          os.Getpid,
 		getPPID:         os.Getppid,
+		getwd:           os.Getwd,
 		insideContainer: runningInsideContainer,
 		readFile:        os.ReadFile,
 		lookPath:        defaultLookPath,

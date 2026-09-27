@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pwd
 import sqlite3
 
@@ -86,6 +87,8 @@ def create_task():
         target = normalize_execution_target(body.get('target'))
     except TargetValidationError as exc:
         return {'error': str(exc)}, 400
+    if target['type'] == 'host' and target.get('workdir') and not os.path.isdir(target['workdir']):
+        return {'error': f"Host 工作目录不存在或不是目录: {target['workdir']}"}, 400
     if target['type'] == TARGET_DOCKER and not (normalized_ids or device_num > 0):
         return {'error': 'docker 目标必须通过 device_ids 或 device_num 申请至少一张设备'}, 400
     est_time = body.get('est_time', 0)

@@ -152,14 +152,17 @@ HTTP/1.1 202 Accepted
 
 #### Host
 
-省略 `target`，或者传入：
+省略 `target` 时沿用用户 HOME 目录和 Worker 的基础环境；CLI `neubox submit`
+会显式传入提交时的工作目录。也可以传入：
 
 ```json
-{"type": "host"}
+{"type": "host", "workdir": "/home/yuxd/project", "env": {"RUN_ID": "trial-1"}}
 ```
 
 命令通过 `bash -i -c` 执行，会加载目标用户的交互 Shell 环境，工作目录为该用户
-的 HOME。Worker 在启动进程前将其加入资源沙盒并切换到 `user_id`。
+的 HOME，除非显式提供 `target.workdir`。工作目录必须是 Worker 节点上存在的
+绝对目录；`target.env` 可显式覆盖或补充环境变量。Worker 在启动进程前将其加入
+资源沙盒并切换到 `user_id`。
 
 `command` 是完整 Shell 命令，调用方不得把未经处理的外部输入直接拼接进去。
 Worker 在进程管道层合并 stdout 和 stderr，因此 Bash 初始化错误、语法解析错误、
@@ -184,7 +187,11 @@ Worker 在进程管道层合并 stdout 和 stderr，因此 Bash 初始化错误�
     "env": {
       "RUN_ID": "experiment-42",
       "PYTHONUNBUFFERED": "1"
-    }
+    },
+    "mounts": [
+      {"source": "/home/yuxd/project", "target": "/workspace", "read_only": true},
+      {"source": "/home/yuxd/runs/42", "target": "/outputs", "read_only": false}
+    ]
   }
 }
 ```
@@ -198,6 +205,7 @@ Worker 在进程管道层合并 stdout 和 stderr，因此 Bash 初始化错误�
 | `workdir` | 否 | 容器内绝对路径 |
 | `user` | 否 | 容器内以哪个用户运行 |
 | `env` | 否 | 环境变量对象，最多 128 项 |
+| `mounts` | 否 | bind mount 数组；`source` 为 Worker 节点上已存在的绝对路径，`target` 为容器内绝对路径，`read_only` 默认 `true` |
 
 容器任务还有以下要求：
 
@@ -207,6 +215,10 @@ Worker 在进程管道层合并 stdout 和 stderr，因此 Bash 初始化错误�
 - 容器是一次性的：Worker 用 `docker run` 起、跑完删除。**不支持在已有容器里
   执行**：容器的归属登记必须发生在它第一个 NPU 进程之前，别人已经起好的容器
   没有这个时机，只能拒绝；
+- 任务的代码和数据可通过 `mounts` 进入容器，输出要写到可写挂载目录才会在容器
+  删除后保留。挂载源必须存在于 Worker 节点或共享文件系统；API 不传输文件；
+- `mounts` 由节点上的 rootful Docker 打开宿主路径。Worker API 应只对受信任的
+  调用方开放；当前请求中的 `user_id` 不是挂载路径的权限边界；
 - `command` 是**参数表**不是 shell 字符串：Worker 把它交给 Docker 时会按 shell
   引用规则拆成 argv（docker-py 的 `split_command`）。要跑多语句或重定向，自己写
   `sh -c '...'`，例如 `"sh -c 'echo hi; sleep 1'"`；直接写裸脚本会被拆成

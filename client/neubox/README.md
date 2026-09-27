@@ -10,10 +10,12 @@ Neu Box 的终端沙盒隔离 / 命令任务提交客户端。Go 单文件静态
 ```
 neubox acquire [选项...]       为当前终端同步申请沙盒
 neubox submit [选项...] -- CMD 异步提交命令任务
-neubox release <sandbox_name>  释放沙盒
+neubox release [sandbox_name]  不传名称时释放当前 shell 的沙盒
 neubox cancel <id> [--kind task|acquire]
                                取消排队中/运行中的条目（acquire 已拿到卡则就地释放）
 neubox docker run DOCKER_ARGS 透传 docker run，自动补沙盒 annotation
+neubox docker shell [资源选项] -- DOCKER_ARGS
+                               临时申请设备、启动前台容器、退出后释放
 neubox docker start 容器 [参数] 借条式改绑：把当前 shell 的沙盒借给停着的容器
 neubox {list|status|join}      沙盒管理
 neubox tasks [--all | --since 4h]
@@ -41,7 +43,7 @@ neubox [--json] version
 | 选项 | 说明 |
 |---|---|
 | `--pid 12345` | 指定 PID（默认当前 shell 的父进程） |
-| （无容器选项） | acquire 只接受宿主机 PID；容器应使用 Worker 创建的一次性任务 |
+| （无容器选项） | acquire 只接受宿主机 PID；交互容器可用 `neubox docker shell` |
 
 命令任务统一使用 `submit`，其专属选项为：
 
@@ -49,9 +51,13 @@ neubox [--json] version
 |---|---|
 | `--priority 1` | 队列优先级：0=普通，数值越大越先执行 |
 | `--image IMAGE` | 使用 Worker 创建并登记的一次性容器 |
-| `--workdir PATH` | 容器命令工作目录 |
+| `--wait` | 提交后直接跟踪日志和退出状态；中断跟踪不取消任务 |
+| `--workdir PATH` | 工作目录；Host 默认提交时所在目录 |
 | `--container-user USER` | 容器命令用户 |
-| `--env K=V` | 容器命令环境变量（可重复） |
+| `--env KEY[=VALUE]` | 显式传入环境变量；省略值时取提交终端的值（可重复） |
+| `--project` | Docker：把当前目录可写挂载到 `/workspace`，并默认在其中运行 |
+| `--mount HOST:CONTAINER[:ro|rw]` | Docker：挂载已有宿主路径；默认只读（可重复） |
+| `--output HOST[:CONTAINER]` | Docker：创建并挂载可写输出目录；容器内默认 `/outputs` |
 | `--command "..."` | 命令字符串；也可把命令及参数放在 `--` 后 |
 
 默认输出为适合终端阅读的摘要，不混入 Worker 原始 JSON。自动化调用可将
@@ -91,6 +97,16 @@ docker run --annotation sandbox_cgroup=<沙盒名> --rm -it ubuntu bash
 `docker run` 以外的 docker 子命令（build / ps / compose / …）不支持，同样直接
 写原生 docker，或者继续用 Worker 的 `submit --image`。
 
+一次性容器终端可以一步启动：
+
+```bash
+neubox docker shell --device-num 2 -- ubuntu bash
+```
+
+这条命令只把 `neubox` 进程放入临时沙盒，保持原宿主 shell 不变；Docker 前台容器
+退出后自动释放设备，并删除这次容器。需要长期保留容器时，继续使用上面的
+`acquire` → `neubox docker run` 流程。
+
 `docker start` 面向**已经停着**的容器：annotation 在建容器时就写死了、改不了，
 所以 start 走"借条"模型 —— 启动前把当前 shell 所在沙盒借给这个容器
 （`POST /container/intent`，10 秒内有效、一次性），容器启动后 Worker 的
@@ -114,7 +130,25 @@ neubox wait TASK_ID --interval 5s --timeout 2h
 
 `wait` 使用日志接口的字节 offset 只读取新增部分，同时轮询任务状态；进入终态后
 再拉取一次剩余日志。日志写到 stdout，状态变化写到 stderr，任务 `completed`
-退出 0，`failed` 退出非 0。中断或本地超时只停止跟踪，不会取消远端任务。
+退出 0，`failed` 退出 1，`cancelled` 退出 130。中断或本地超时只停止跟踪，
+不会取消远端任务。
+
+`submit` 默认返回任务 ID；`submit --wait` 会在提交后直接执行同样的增量跟踪。
+Host 任务会从提交时的工作目录启动，不会自动复制提交终端的所有环境变量；
+需要的变量用 `--env KEY` 或 `--env KEY=VALUE` 明确传入。
+
+Docker 任务可直接使用项目和持久化输出：
+
+```bash
+neubox submit --image training:v1 --project --output ./runs/exp1 \
+  --mount /datasets:/datasets:ro --wait -- python train.py
+```
+
+`--project` 映射当前目录到 `/workspace` 且可写；`--output` 映射创建好的宿主目录
+到容器内 `/outputs`。这些路径必须位于 Worker 节点或共享文件系统上，客户端不会
+上传文件。容器默认用户如果是 root，写回宿主的文件也可能由 root 拥有；可用
+`--container-user "$(id -u):$(id -g)"` 指定用户。任务结束时一次性容器会删除，
+bind mount 里的输出文件会保留。
 
 ## 环境变量
 
@@ -164,7 +198,7 @@ sudo install -m 0755 neubox /usr/local/bin/neubox
 # 终端独占 2 张卡
 neubox acquire --device-num 2
 # 退出前释放
-neubox release "$(neubox list | grep current)"
+neubox release
 
 # 提交高优先级任务（4 卡）
 neubox submit --device-num 4 --priority 1 -- python train.py

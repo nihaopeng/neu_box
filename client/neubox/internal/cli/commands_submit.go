@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/neusbox/neu_box/client/neubox/internal/api"
@@ -11,10 +13,17 @@ import (
 
 type commandTarget struct {
 	Type    string            `json:"type"`
-	Image   string            `json:"image"`
-	Workdir *string           `json:"workdir"`
-	User    *string           `json:"user"`
-	Env     map[string]string `json:"env"`
+	Image   string            `json:"image,omitempty"`
+	Workdir *string           `json:"workdir,omitempty"`
+	User    *string           `json:"user,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Mounts  []commandMount    `json:"mounts,omitempty"`
+}
+
+type commandMount struct {
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
 }
 
 type commandRequest struct {
@@ -96,6 +105,8 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 			if err != nil {
 				return options, err
 			}
+		case "--wait":
+			options.wait = true
 		case "--workdir":
 			raw, err := optionValue(args, &index)
 			if err != nil {
@@ -108,14 +119,35 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 				return options, err
 			}
 			options.containerUser = raw
+		case "--mount":
+			raw, err := optionValue(args, &index)
+			if err != nil {
+				return options, err
+			}
+			options.mounts = append(options.mounts, raw)
+		case "--project":
+			options.project = true
+		case "--output":
+			raw, err := optionValue(args, &index)
+			if err != nil {
+				return options, err
+			}
+			options.output = raw
 		case "--env":
 			raw, err := optionValue(args, &index)
 			if err != nil {
 				return options, err
 			}
 			key, envValue, found := strings.Cut(raw, "=")
-			if !found || strings.TrimSpace(key) == "" {
-				return options, fmt.Errorf("--env 必须是 KEY=VALUE: %s", raw)
+			if !found {
+				key = raw
+				envValue, found = os.LookupEnv(key)
+				if !found {
+					return options, fmt.Errorf("本地环境变量 %s 不存在", key)
+				}
+			}
+			if strings.TrimSpace(key) == "" {
+				return options, fmt.Errorf("--env 必须是 KEY 或 KEY=VALUE: %s", raw)
 			}
 			options.environment[key] = envValue
 		default:
@@ -129,8 +161,8 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 	if strings.TrimSpace(options.command) == "" {
 		return options, errors.New("submit 缺少命令；请在 -- 后指定命令")
 	}
-	if options.image == "" && (options.workdir != "" || options.containerUser != "" || len(options.environment) > 0) {
-		return options, errors.New("--workdir/--container-user/--env 必须配合 --image")
+	if options.image == "" && (options.containerUser != "" || len(options.mounts) > 0 || options.project || options.output != "") {
+		return options, errors.New("--container-user/--mount/--project/--output 必须配合 --image")
 	}
 	if err := validateResourceOptions(&options.resourceOptions); err != nil {
 		return options, err
@@ -165,6 +197,13 @@ func quoteCommandArgument(argument string) string {
 }
 
 func (a *app) submitCommand(options submitOptions) int {
+	if options.wait && a.jsonOutput {
+		return a.usageError("submit --wait 会连续输出日志，不支持 --json")
+	}
+	workingDirectory, err := a.getwd()
+	if err != nil {
+		return a.usageError(fmt.Sprintf("无法读取当前工作目录: %v", err))
+	}
 	payload := commandRequest{
 		UserID:    a.config.username,
 		Command:   options.command,
@@ -176,12 +215,28 @@ func (a *app) submitCommand(options submitOptions) int {
 		Priority:  options.priority,
 	}
 	if options.image != "" {
+		mounts, workdir, err := a.dockerSubmitMounts(options, workingDirectory)
+		if err != nil {
+			return a.usageError(err.Error())
+		}
 		payload.Target = &commandTarget{
 			Type:    "docker",
 			Image:   options.image,
-			Workdir: nullableString(options.workdir),
+			Workdir: nullableString(workdir),
 			User:    nullableString(options.containerUser),
 			Env:     options.environment,
+			Mounts:  mounts,
+		}
+	} else {
+		workdir := workingDirectory
+		if options.workdir != "" {
+			workdir = options.workdir
+		}
+		if !filepath.IsAbs(workdir) {
+			workdir = filepath.Join(workingDirectory, workdir)
+		}
+		payload.Target = &commandTarget{
+			Type: "host", Workdir: nullableString(workdir), Env: options.environment,
 		}
 	}
 	status, raw, err := a.worker.Request(http.MethodPost, "/tasks", nil, payload)
@@ -208,7 +263,91 @@ func (a *app) submitCommand(options submitOptions) int {
 	if response.Priority > 0 {
 		fmt.Fprintf(a.out, "    priority: %d\n", response.Priority)
 	}
+	if payload.Target != nil {
+		if payload.Target.Type == "docker" {
+			fmt.Fprintf(a.out, "    image: %s\n", payload.Target.Image)
+			for _, mount := range payload.Target.Mounts {
+				mode := "read-only"
+				if !mount.ReadOnly {
+					mode = "writable"
+				}
+				fmt.Fprintf(a.out, "    mount: %s → %s (%s)\n", mount.Source, mount.Target, mode)
+			}
+		} else if payload.Target.Workdir != nil {
+			fmt.Fprintf(a.out, "    workdir: %s\n", *payload.Target.Workdir)
+		}
+	}
 	fmt.Fprintf(a.out, "    command: %s\n", options.command)
 	fmt.Fprintf(a.out, "    follow: neubox wait %s\n", response.TaskID)
+	if options.wait {
+		return a.runWait([]string{response.TaskID})
+	}
 	return 0
+}
+
+func absoluteMountSource(source, cwd string) (string, error) {
+	if strings.TrimSpace(source) == "" {
+		return "", errors.New("挂载源路径不能为空")
+	}
+	absolute := source
+	if !filepath.IsAbs(absolute) {
+		absolute = filepath.Join(cwd, absolute)
+	}
+	absolute = filepath.Clean(absolute)
+	if _, err := os.Stat(absolute); err != nil {
+		return "", fmt.Errorf("挂载源 %s 不可访问: %w", absolute, err)
+	}
+	return absolute, nil
+}
+
+func (a *app) dockerSubmitMounts(options submitOptions, cwd string) ([]commandMount, string, error) {
+	mounts := make([]commandMount, 0, len(options.mounts)+2)
+	workdir := options.workdir
+	if options.project {
+		mounts = append(mounts, commandMount{Source: cwd, Target: "/workspace"})
+		if workdir == "" {
+			workdir = "/workspace"
+		}
+	}
+	for _, spec := range options.mounts {
+		parts := strings.Split(spec, ":")
+		if len(parts) < 2 || len(parts) > 3 || !strings.HasPrefix(parts[1], "/") {
+			return nil, "", fmt.Errorf("--mount 格式为 宿主路径:容器绝对路径[:ro|rw]: %q", spec)
+		}
+		mode := "ro"
+		if len(parts) == 3 {
+			mode = parts[2]
+		}
+		if mode != "ro" && mode != "rw" {
+			return nil, "", fmt.Errorf("--mount 只接受 ro 或 rw: %q", spec)
+		}
+		source, err := absoluteMountSource(parts[0], cwd)
+		if err != nil {
+			return nil, "", err
+		}
+		mounts = append(mounts, commandMount{Source: source, Target: parts[1], ReadOnly: mode == "ro"})
+	}
+	if options.output != "" {
+		parts := strings.Split(options.output, ":")
+		if len(parts) > 2 || parts[0] == "" {
+			return nil, "", errors.New("--output 格式为 宿主目录[:容器绝对目录]")
+		}
+		target := "/outputs"
+		if len(parts) == 2 {
+			target = parts[1]
+		}
+		if !strings.HasPrefix(target, "/") {
+			return nil, "", errors.New("--output 容器目录必须是绝对路径")
+		}
+		source := parts[0]
+		if !filepath.IsAbs(source) {
+			source = filepath.Join(cwd, source)
+		}
+		source = filepath.Clean(source)
+		if err := os.MkdirAll(source, 0755); err != nil {
+			return nil, "", fmt.Errorf("创建输出目录 %s 失败: %w", source, err)
+		}
+		mounts = append(mounts, commandMount{Source: source, Target: target})
+	}
+	return mounts, workdir, nil
 }
