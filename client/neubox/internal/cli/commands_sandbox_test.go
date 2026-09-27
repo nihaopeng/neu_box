@@ -81,7 +81,7 @@ func TestHostStatusShowsAllocatedResources(t *testing.T) {
 			"sandbox_name": "sbx_yuxd_111.slice",
 			"sandbox": map[string]any{
 				"name": "sbx_yuxd_111.slice", "devices": []string{"235:0", "235:1"},
-				"state": "active",
+				"state": "ACTIVE", "cpu": 4, "mem": "8G",
 			},
 		})
 	}))
@@ -93,8 +93,13 @@ func TestHostStatusShowsAllocatedResources(t *testing.T) {
 	if code := application.run([]string{"status"}); code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "devices: 235:0, 235:1") ||
-		!strings.Contains(out.String(), "cpu:") || !strings.Contains(out.String(), "memory:") {
-		t.Fatalf("unexpected status output: %s", out.String())
+	const want = "sandbox: sbx_yuxd_111.slice\n" +
+		"state:   ACTIVE\n" +
+		"pid:     111\n" +
+		"devices: 235:0, 235:1\n" +
+		"cpu:     4\n" +
+		"memory:  8G\n"
+	if out.String() != want {
+		t.Fatalf("status output:\n%s\nwant:\n%s", out.String(), want)
 	}
 }

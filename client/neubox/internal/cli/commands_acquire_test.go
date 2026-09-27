@@ -141,9 +141,14 @@ func TestAcquirePrintsAllocatedResources(t *testing.T) {
 	if code := application.run([]string{"acquire"}); code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	for _, want := range []string{"result:", "acquired", "sandbox:", "devices: 235:1", "cpu:", "unlimited", "memory:"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("missing %q in %s", want, out.String())
-		}
+	const want = "result:  acquired\n" +
+		"sandbox: sbx_yuxd_42.slice\n" +
+		"state:   ACTIVE\n" +
+		"pid:     111\n" +
+		"devices: 235:1\n" +
+		"cpu:     unlimited\n" +
+		"memory:  unlimited\n"
+	if out.String() != want {
+		t.Fatalf("acquire output:\n%s\nwant:\n%s", out.String(), want)
 	}
 }
