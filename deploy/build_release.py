@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Worker, client, and OCI runtime release RPMs."""
+"""Build one RPM containing the Worker, client, and OCI runtime."""
 
 from __future__ import annotations
 
@@ -66,6 +66,38 @@ def _build_client(build_dir: Path, version: str) -> Path:
     ], cwd=source, env=environment)
     _run([str(binary), "version"])
     return binary
+
+
+def _build_runtime(build_dir: Path, version: str) -> Path:
+    source = ROOT / "runtime" / "neubox"
+    if not (source / "go.mod").is_file():
+        raise SystemExit(f"missing OCI runtime source: {source}")
+    go = shutil.which("go")
+    if not go:
+        raise SystemExit("missing Go toolchain for the OCI runtime")
+    build_dir.mkdir(parents=True, exist_ok=True)
+    architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(
+        platform.machine(),
+    )
+    if not architecture:
+        raise SystemExit(f"unsupported build architecture: {platform.machine()}")
+    environment = os.environ.copy()
+    environment.update({
+        "CGO_ENABLED": "0",
+        "GOOS": "linux",
+        "GOARCH": architecture,
+        "GOTOOLCHAIN": "local",
+        "GOCACHE": str(build_dir / "go-cache"),
+    })
+    for component in ("runtime", "hook", "config"):
+        _run([
+            go, "build", "-trimpath", "-buildvcs=false",
+            "-ldflags", f"-s -w -X main.version={version}",
+            "-o", str(build_dir / f"neu-box-{component}"),
+            f"./cmd/neu-{component}",
+        ], cwd=source, env=environment)
+    _run([str(build_dir / "neu-box-config"), "version"])
+    return build_dir
 
 
 def _require_pidfd_open() -> None:
@@ -178,6 +210,7 @@ def main() -> int:
         pyinstaller_dist, pyinstaller_work / "deployment-tests",
     )
     client_binary = _build_client(BUILD_ROOT / "client", version)
+    runtime_bin_dir = _build_runtime(BUILD_ROOT / "runtime", version)
 
     command = [
         sys.executable,
@@ -190,19 +223,11 @@ def main() -> int:
         "--sandbox-executable", str(native_build / "neu-box-sandbox"),
         "--bpf-object", str(native_build / "device_block.o"),
         "--client-executable", str(client_binary),
+        "--runtime-bin-dir", str(runtime_bin_dir),
     ]
     if args.source_only:
         command.append("--source-only")
     _run(command)
-    runtime_command = [
-        "bash", str(ROOT / "runtime" / "neubox" / "deploy" / "rpm" / "build_rpm.sh"),
-        f"--version={version}",
-        f"--release={args.release}",
-        f"--output-dir={Path(args.output_dir).expanduser().resolve()}",
-    ]
-    if args.source_only:
-        runtime_command.append("--source-only")
-    _run(runtime_command)
     return 0
 
 

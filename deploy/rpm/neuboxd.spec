@@ -4,7 +4,7 @@
 Name:           neuboxd
 Version:        %{neu_box_version}
 Release:        %{neu_box_release}
-Summary:        Neu Box accelerator worker
+Summary:        Neu Box Worker, client, and OCI runtime
 License:        MIT
 URL:            https://github.com/neusbox/neu_box
 Source0:        %{name}-%{version}-%{release}.tar.gz
@@ -12,7 +12,6 @@ Source0:        %{name}-%{version}-%{release}.tar.gz
 ExclusiveArch:  x86_64 aarch64
 Requires:       /bin/bash
 Requires:       systemd
-Requires:       neu-box-runtime = %{version}-%{release}
 
 # PyInstaller resolves libraries below _internal itself. Do not advertise those
 # private copies as system capabilities or turn their internal edges into host
@@ -29,10 +28,9 @@ Requires:       neu-box-runtime = %{version}-%{release}
 %global __strip /bin/true
 
 %description
-Neu Box Worker runs accelerator jobs and enforces their device isolation.
-This package contains the matching neubox CLI, self-contained worker bundle, native sandbox helper,
-precompiled BPF object, device information scripts, the deployment acceptance
-suite, configuration, and systemd unit.
+Neu Box runs accelerator jobs and enforces their device isolation. This RPM
+ships the Worker, neubox CLI, OCI runtime wrapper, hook, config tool, native
+sandbox, BPF object, deployment tests, and systemd unit together.
 
 %prep
 %autosetup -p1
@@ -47,6 +45,9 @@ cp -a rootfs/. %{buildroot}/
 test -x %{buildroot}%{_libexecdir}/neu-box/neuboxd/neuboxd
 test -x %{buildroot}/usr/local/bin/neubox
 test -L %{buildroot}/usr/local/bin/neu-sbox
+test -x %{buildroot}/usr/local/bin/neu-box-runtime
+test -x %{buildroot}/usr/local/bin/neu-box-hook
+test -x %{buildroot}/usr/local/bin/neu-box-config
 test -x %{buildroot}%{_libexecdir}/neu-box/neuboxctl/neuboxctl
 test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-sandbox
 test -f %{buildroot}%{_libexecdir}/neu-box/device_block.o
@@ -55,6 +56,8 @@ test -x %{buildroot}%{_libexecdir}/neu-box/tests/neu-box-deployment-tests
 test -L %{buildroot}%{_sbindir}/neuboxd
 test -f %{buildroot}%{_unitdir}/neuboxd.service
 test -f %{buildroot}%{_sysconfdir}/neu-box/worker.env
+test -f %{buildroot}%{_datadir}/neu-box/runtime.env.example
+test ! -e %{buildroot}%{_sysconfdir}/neu-box/runtime.env
 
 %pre
 # Replacing an onedir PyInstaller bundle below a live process is unsafe: it can
@@ -69,9 +72,21 @@ fi
 # Deliberately do not enable or start the service. Database/config migration
 # belongs to the deployment workflow, not an RPM scriptlet.
 /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || :
+cat <<'EOF'
+Neu Box files installed. Docker configuration and restart are manual:
+  1. Run neu-box-config init with this host's real runc path and Worker URL.
+  2. Add neu-box-runtime to /etc/docker/daemon.json and set default-runtime.
+  3. Run neuboxctl setup. Restart dockerd in a maintenance window.
+See the deployment guide installed by this RPM (rpm -qd neuboxd).
+EOF
 
 %preun
 if [ "$1" -eq 0 ]; then
+    if [ -f /etc/docker/daemon.json ] && \
+        grep -q '"neu-box-runtime"' /etc/docker/daemon.json 2>/dev/null; then
+        echo "Docker still names neu-box-runtime; remove that configuration before erasing this RPM" >&2
+        exit 1
+    fi
     if /usr/bin/systemctl is-active --quiet \
         neuboxd.service >/dev/null 2>&1; then
         echo "neuboxd.service is active; run 'neuboxctl pause' before erasing this RPM" >&2
@@ -87,8 +102,12 @@ fi
 
 %files
 %license LICENSE
+%doc DEPLOYMENT.md
 %attr(0755,root,root) /usr/local/bin/neubox
 /usr/local/bin/neu-sbox
+%attr(0755,root,root) /usr/local/bin/neu-box-runtime
+%attr(0755,root,root) /usr/local/bin/neu-box-hook
+%attr(0755,root,root) /usr/local/bin/neu-box-config
 %dir %{_libexecdir}/neu-box
 %{_libexecdir}/neu-box/neuboxd
 %{_libexecdir}/neu-box/neuboxctl
@@ -98,6 +117,7 @@ fi
 %{_libexecdir}/neu-box/tests/*
 %dir %{_datadir}/neu-box
 %{_datadir}/neu-box/info
+%attr(0644,root,root) %{_datadir}/neu-box/runtime.env.example
 %attr(0644,root,root) %{_datadir}/neu-box/manifest.json
 %{_sbindir}/neuboxctl
 %{_sbindir}/neuboxd

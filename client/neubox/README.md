@@ -61,7 +61,7 @@ stderr。
 ## 容器
 
 容器快捷命令使用同仓的 Worker API 和 OCI runtime/hook。部署时要安装
-Worker/client 与 runtime 两个 RPM，配置 Docker 默认 runtime，并在维护窗口重启
+单个 RPM，手动配置 Docker 默认 runtime，并在维护窗口重启
 dockerd；步骤见 [部署手册](../../docs/deployment.md)。
 
 容器要拿到设备，**必须带 `sandbox_cgroup` annotation**：Worker 靠它把容器登记到
@@ -85,8 +85,8 @@ docker run --annotation sandbox_cgroup=<沙盒名> --rm -it ubuntu bash
 沙盒名按本进程 PID 反查（`GET /sandbox/status?pid=<自己>`）；查不到直接报错，
 不会退化成"不加 annotation 照样起"。
 
-`neu-box-runtime` 随配套 runtime RPM 安装；runtime 配置脚本会检查 hook 与
-真正的 runc，再设置 Docker 的 `default-runtime`。
+`neu-box-runtime` 随同一个 `neuboxd` RPM 安装；用户需用 `neu-box-config init`
+设置真正的 runc，再手动设置 Docker 的 `default-runtime`。
 
 `docker run` 以外的 docker 子命令（build / ps / compose / …）不支持，同样直接
 写原生 docker，或者继续用 Worker 的 `submit --image`。

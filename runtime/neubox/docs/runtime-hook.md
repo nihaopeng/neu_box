@@ -57,9 +57,8 @@ runtime 和 hook **不碰 BPF、不碰数据库**，只负责把可信的运行�
 }
 ```
 
-键和值都叫 `neu-box-runtime`，和二进制（以及 RPM 包）同名。**别退回短名
-`neu-box`** —— 那个名字同时被运维命令和 OCI runtime 占用过，运维命令已经改名成
-`neu-box-installer`，再留一个短名就又分不清说的是谁了。
+键和值都叫 `neu-box-runtime`，与二进制同名；发布 RPM 名为 `neuboxd`，
+同包安装 Worker、client 和 runtime。
 
 **`neu-box-runtime` 是默认 runtime**，用户不需要写 `--runtime`。没带 annotation
 的容器照常启动 —— wrapper 什么都不做，直接转发给真 runc；它会不会拿到设备由 BPF
@@ -75,9 +74,9 @@ runtime 和 hook **不碰 BPF、不碰数据库**，只负责把可信的运行�
 `default-runtime` 指向一个不存在或跑不起来的二进制，dockerd 会**起不了任何容器**。
 所以：
 
-- `install.sh` 必须先装好二进制并验证它能执行，**再**改 `daemon.json`；
-- `uninstall.sh` 必须先还原 `daemon.json`，**再**删二进制；
-- 包自己的 `%preun` 守住同一个不变式：`daemon.json` 还指着 `neu-box-runtime`
+- 用户先安装 RPM，确认 runtime、hook 和真正的 runc 可执行，**再手动**改 `daemon.json`；
+- 卸载前先手动从 `daemon.json` 移除 Neu Box runtime 配置，**再**卸载 RPM；
+- RPM 的 `%preun` 守住同一个不变式：`daemon.json` 还指着 `neu-box-runtime`
   时拒绝 `rpm -e`。
 
 两边都要在改 `daemon.json` 之前备份。`runtimes` / `default-runtime` **不支持热
@@ -187,12 +186,12 @@ runtime 没有常驻进程，"启动时"就是部署那一刻。忘了迁移不�
 配置读不动（文件缺失、语法错）不致命：用默认值接着干活，问题打一行 stderr。
 在容器创建路径上因为配置文件打不开就拒绝启动，代价比配错了还大。
 
-**为什么不塞进 `worker.env`**：runtime 是独立包。两个包写同一个配置文件是所有权
-冲突，而且会让 runtime 反向依赖 worker 包。
+**为什么不塞进 `worker.env`**：两种配置的写者和迁移规则不同。`worker.env` 由
+RPM 提供初始文件，`runtime.env` 由 `neu-box-config` 生成，避免同一文件有两个写者。
 
 **一份事实两处描述的地方**：`NEU_BOX_WORKER_URL` 里的端口和 worker.env 的
-`NEU_BOX_PORT` 说的是同一件事，会漂。`install.sh` 生成这份文件时从 `worker.env`
-读端口交给 `neu-box-config`，改端口时两处都要动 —— 没有任何机制替你保持同步。
+`NEU_BOX_PORT` 说的是同一件事，会漂。用户执行 `neu-box-config init` 时要把
+`worker.env` 中的端口传给 `--worker-url`；改端口时两处都要动。
 
 `NEU_BOX_REAL_RUNC` 必须可配：以后和 Ascend Docker Runtime 串接时，wrapper
 后面接的就不是 runc 了。

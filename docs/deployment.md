@@ -3,29 +3,51 @@
 ## 部署
 
 ```bash
-# 首次安装：两个同版本 RPM 在一次事务中安装 Worker、client 与 runtime
-sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm ./neu-box-runtime-<version>-<release>.<arch>.rpm
+# 首次安装：一个 RPM 安装 Worker、client 与 runtime 的程序文件
+sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env          # 手动配置监听地址、设备过滤器、设备状态脚本等
-sudo bash /usr/libexec/neu-box/runtime/scripts/install.sh --configure-only
+sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
+sudo neu-box-config show
+sudoedit /etc/docker/daemon.json         # 手动合并下方两个 Docker 配置键
 sudo neuboxctl setup              # 检查/迁移数据库，启动 Worker，健康检查通过后恢复调度
-# daemon.json 的更改需要在维护窗口重启 Docker；现有容器会受影响
+# 用户在维护窗口确认现有容器后，手动重启 Docker
+docker ps
 sudo systemctl restart docker
+docker info --format '{{.DefaultRuntime}}'  # 应为 neu-box-runtime
 curl -fsS http://127.0.0.1:59075/healthz
 sudo neuboxctl test               # 部署后真机测试
 
-# 升级：先 pause，再安装新包、setup、验收
+# 升级：先 pause，再装同一个包、迁移配置、setup、验收
 sudo neuboxctl pause
-sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm ./neu-box-runtime-<version>-<release>.<arch>.rpm
-sudo bash /usr/libexec/neu-box/runtime/scripts/install.sh --configure-only
+sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
+sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
 sudo neuboxctl setup
 sudo neuboxctl test
 ```
 
 `pause` 是升级前必须执行的停服路径：排空任务和沙盒、备份数据库和配置、清理旧 BPF pins 后停止 Worker；`setup` 是唯一启动路径：迁移旧配置和 SQLite schema，加载新版 BPF，`/healthz` 通过后恢复调度。启动和停止统一走 `neuboxctl setup` / `pause`，只读观察使用 `systemctl status`、`journalctl`；等待超时可用 `--timeout <秒>` 调整。
 
-runtime 配置脚本只迁移 `runtime.env` 并验证 wrapper/hook，然后设置
-Docker 的 `default-runtime`；它不会重启 Docker。升级时如果改了 daemon.json，
-也要安排 Docker 重启。部署机不需要 runtime 源码检出，脚本随 runtime RPM 安装。
+`neu-box-config init` 由用户执行，生成或迁移 `/etc/neu-box/runtime.env`，不会覆盖
+手工改过的值。`--real-runc` 必须指向本机真正的 runc，`--worker-url` 的端口要与
+`worker.env` 的 `NEU_BOX_PORT` 一致。RPM 自身不编辑 Docker 配置、不启动 Worker、
+不重启 dockerd。
+
+用 `sudoedit /etc/docker/daemon.json` 将下面两个键**合并**进现有 JSON，保留原有
+键和值；如果文件不存在，创建包含这些键的 JSON 对象：
+
+```json
+{
+  "default-runtime": "neu-box-runtime",
+  "runtimes": {
+    "neu-box-runtime": {"path": "/usr/local/bin/neu-box-runtime"}
+  }
+}
+```
+
+保存后检查 JSON 格式（例如 `jq -e . /etc/docker/daemon.json`），由用户在维护窗口
+手动重启 dockerd，再用 `docker info --format '{{.DefaultRuntime}}'` 验证。升级时若
+Docker 配置没有变化，无需为替换 runtime 二进制而重启 dockerd；若改了配置，仍需
+安排手动重启。
 
 部署后验收必须在维护窗口以 root 执行，会使用真实 API、任务、设备和容器。
 
@@ -114,11 +136,10 @@ uv run --frozen --group build deploy/build_release.py
 构建完成后检查产物：
 
 ```bash
-ls -l dist/rpm/neuboxd-*.rpm dist/rpm/neu-box-runtime-*.rpm
+ls -l dist/rpm/neuboxd-*.rpm
 
 rpm -qpi dist/rpm/neuboxd-*.rpm
-rpm -qpl dist/rpm/neuboxd-*.rpm | grep -E 'neuboxctl|neubox|neu-box-deployment-tests'
-rpm -qpl dist/rpm/neu-box-runtime-*.rpm
+rpm -qpl dist/rpm/neuboxd-*.rpm | grep -E 'neuboxctl|neubox|neu-box-(runtime|hook|config|deployment-tests)'
 rpm -qpR dist/rpm/neuboxd-*.rpm
 ```
 

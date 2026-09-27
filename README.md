@@ -49,7 +49,7 @@ Neu Box 由本仓库和 WebUI 仓库组成：
 
 | 仓库 | 职责 | 部署方式 |
 |---|---|---|
-| **[neu_box](https://github.com/neusbox/neu_box)** | Worker、设备沙盒、`neubox` 客户端、OCI runtime 与聚合测试 | 同版本的 Worker/client 和 runtime RPM |
+| **[neu_box](https://github.com/neusbox/neu_box)** | Worker、设备沙盒、`neubox` 客户端、OCI runtime 与聚合测试 | 单个 `neuboxd` RPM |
 | **[neu_box_webui](https://github.com/neusbox/neu_box_webui)** | 节点池、任务转发、实验记录与 Web 界面 | Python 3.11+ 源码运行 |
 
 本仓库通过 `thirds/webui` submodule 固定已验证的 WebUI 提交。
@@ -69,14 +69,16 @@ Neu Box 由本仓库和 WebUI 仓库组成：
 ### 安装节点组件
 
 从 [GitHub Releases](https://github.com/neusbox/neu_box/releases) 下载与目标机器
-架构匹配、版本相同的 `neuboxd` 与 `neu-box-runtime` RPM：
+架构匹配的 `neuboxd` RPM 包含 Worker、client 和 runtime：
 
 ```bash
-sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm ./neu-box-runtime-<version>-<release>.<arch>.rpm
+sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env
-sudo bash /usr/libexec/neu-box/runtime/scripts/install.sh --configure-only
+sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
+sudoedit /etc/docker/daemon.json  # 手动设置 default-runtime / runtimes.neu-box-runtime
 sudo neuboxctl setup
-# Docker 默认 runtime 配置需要在维护窗口重启 dockerd 后才生效
+# 用户在维护窗口确认现有容器后，手动重启 dockerd
+docker ps
 sudo systemctl restart docker
 curl -fsS http://127.0.0.1:59075/healthz
 sudo neuboxctl test            # 维护窗口内：真实任务与设备的实机验收
@@ -85,8 +87,10 @@ sudo neuboxctl test            # 维护窗口内：真实任务与设备的实�
 `neuboxctl setup` 迁移并检查数据库，以暂停状态启动 Worker；Worker 加载
 BPF，通过健康检查后恢复调度。默认等待启动 60 秒，可用 `--timeout` 调整。
 Worker 默认监听 `0.0.0.0:59075`，运维入口是 `/usr/sbin/neuboxctl`；
-客户端是 `/usr/local/bin/neubox`。配置 runtime 时脚本会验证二进制、生成
-`runtime.env` 并设置 Docker 默认 runtime，但不会自行重启 dockerd。
+客户端是 `/usr/local/bin/neubox`。RPM 不改 `daemon.json`，也不重启 Docker；
+应将 `default-runtime` 设为 `neu-box-runtime`，将
+`runtimes.neu-box-runtime.path` 设为 `/usr/local/bin/neu-box-runtime`。完整 JSON
+示例和检查命令见 [部署手册](docs/deployment.md)。
 
 `setup` 通过后跑 `neuboxctl test` 做验收：套件随 RPM 安装在
 `/usr/libexec/neu-box/tests/`，是一个自带 pytest 的 PyInstaller 产物（部署机不需要
@@ -119,8 +123,8 @@ systemd 拒绝，因为直接停服务会跳过排空、备份和旧 BPF 清理�
 
 ```bash
 sudo neuboxctl pause
-sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm ./neu-box-runtime-<version>-<release>.<arch>.rpm
-sudo bash /usr/libexec/neu-box/runtime/scripts/install.sh --configure-only
+sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
+sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
 sudo neuboxctl setup
 ```
 
@@ -183,7 +187,7 @@ curl http://127.0.0.1:59075/status
 |---|---|---|
 | Worker | `0.5.x` | `api_version = 2` |
 | WebUI | `0.1.x` | Worker `>= 0.4.0` |
-| `neubox` 与 OCI runtime | 与 Worker 同版本 | 同一源码快照构建、同次安装 |
+| `neubox` 与 OCI runtime | 与 Worker 同版本 | 同一 RPM 构建、安装和升级 |
 
 `API_VERSION` 只在发生破坏性 HTTP 契约变更时递增。部署前可使用
 `neubox check` 或 `/healthz` 验证兼容性。
@@ -255,7 +259,7 @@ thirds/webui/         WebUI submodule
 
 - 发布版本定义在 `src/neu_box/__init__.py`，构建时注入客户端和 runtime
 - 构建入口为 `deploy/build_release.py`，产物写入 `dist/rpm/`
-- GitHub Release 使用 `v<version>` tag，并为 x86_64、aarch64 分别发布两种 RPM
+- GitHub Release 使用 `v<version>` tag，并为 x86_64、aarch64 分别发布一个 RPM
 - RPM 的 Version 取自 `src/neu_box/__init__.py`；修订构建应递增 Release
 
 ## 参与项目

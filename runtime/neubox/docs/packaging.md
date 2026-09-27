@@ -47,6 +47,15 @@ gofmt -l .
 
 ## 打包
 
+正式发布从仓库根运行：
+
+```bash
+uv run --frozen --group build deploy/build_release.py
+```
+
+它构建一个 `neuboxd` RPM，其中包含 Worker、client 和本目录三个 runtime 二进制。
+下面的旧入口只用于单独调试 runtime 打包，不属于正式发布流程：
+
 ```bash
 bash deploy/rpm/build_rpm.sh                 # 编译 + 打包，产物在 dist/rpm/
 bash deploy/rpm/build_rpm.sh --no-build      # 用 dist/ 里已有的二进制
@@ -55,39 +64,38 @@ bash deploy/rpm/build_rpm.sh --source-only   # 只出 tar.gz 和渲染后的 spe
 
 编译在 rpmbuild 之前做完，spec 只落文件 —— spec 里没有工具链。
 
-runtime RPM 的主要条目（[`../deploy/rpm/neu-box-runtime.spec`](../deploy/rpm/neu-box-runtime.spec)）：
+正式发布的 RPM 文件清单见 [`../../../deploy/rpm/neuboxd.spec`](../../../deploy/rpm/neuboxd.spec)；
+本目录中 runtime 的主要安装路径为：
 
 | 路径 | 权限 | 说明 |
 |---|---|---|
-| `/etc/neu-box` | 0750 root:root | 配置目录（目录归包，文件不归） |
+| `/etc/neu-box` | 0750 root:root | `worker.env` 归包；`runtime.env` 由配置工具生成 |
 | `/usr/local/bin/neu-box-runtime` | 0755 | wrapper |
 | `/usr/local/bin/neu-box-hook` | 0755 | OCI hook |
 | `/usr/local/bin/neu-box-config` | 0755 | 配置生成/迁移 |
-| `/usr/libexec/neu-box/runtime/scripts/` | 0755 | 已安装节点的配置与卸载脚本 |
 
-包里**没有** `runtime.env`：那份文件由 `neu-box-config` 在部署时生成。仓库里的
-`deploy/config/runtime.env.example` 只是键的文档，不进包。
+包里**没有** `runtime.env`：那份文件由用户执行 `neu-box-config init` 生成。
+键的说明模板安装在 `/usr/share/neu-box/runtime.env.example`。
 
 ### 为什么路径写死在 /usr/local/bin
 
-不是惯例，是契约：daemon.json 里的 path、两个二进制自己的内置默认值
-（`NEU_BOX_HOOK` / `NEU_BOX_REAL_RUNC`）、以及 `scripts/install.sh` 三方都钉在这个
-前缀上。包换一个路径，装上就会有两份运行时 —— daemon.json 指一份、下次升级更新
-另一份。
+这个路径是 Docker `daemon.json` 里的 path 和二进制内置默认值
+（`NEU_BOX_HOOK` / `NEU_BOX_REAL_RUNC`）共同使用的契约。改路径要同时修改
+手动配置步骤和这些默认值。
 
-### 为什么没有 Requires
+### 为什么不声明 Docker 和 runc 依赖
 
-对三个二进制没有：它们都是静态的（`CGO_ENABLED=0`），没有可声明的依赖。rpmbuild
-会自动补上脚本对 `/bin/sh` 的依赖，那个每台机器都有。
+三个 runtime 二进制都是静态的（`CGO_ENABLED=0`），自身没有动态库依赖。
+合并 RPM 仍声明 Worker 需要的 systemd 等依赖。
 
 runc 和 Docker **故意不写**：装 Docker 的机器上 runc 往往是它自带的普通文件
 （本机是 `/usr/local/bin/runc`，`rpm -qf` 说不属于任何软件包），`Requires: runc` /
-`Requires: docker` 只会让包装不上。该挡的那件事在部署那一步挡：`install.sh` 在改
-`daemon.json` **之前**检查 `NEU_BOX_REAL_RUNC` 和 `NEU_BOX_HOOK` 真的存在且可执行。
+`Requires: docker` 只会让包装不上。用户在手动修改 `daemon.json` 前应先确认
+`NEU_BOX_REAL_RUNC` 和 `NEU_BOX_HOOK` 指向的程序确实存在且可执行。
 
 ### 包脚本做了什么（很少）
 
-- `%post`：首次安装打一段"文件装好了但还没生效"的提示，升级则提示配置迁移在部署
-  步骤里。别的一律不做 —— 不碰 daemon.json、不碰配置、不重启 dockerd。
+- `%post`：刷新 systemd unit 并打印人工配置步骤；不碰 daemon.json、不生成
+  `runtime.env`、不重启 dockerd。
 - `%preun`：最终卸载时，如果 daemon.json 还指着 neu-box-runtime 就拒绝 `rpm -e`。
-- `%pre`：空。在 dockerd 跑着的时候拒绝安装，会让这个包在任何 Docker 机器上都装不了。
+- `%pre`：Worker 服务运行中时拒绝升级，要求先用 `neuboxctl pause`。
