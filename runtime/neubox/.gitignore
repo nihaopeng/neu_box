@@ -1,0 +1,15 @@
+# 构建产物（只匹配仓库根下的可执行文件，不要匹配 cmd/ 下的同名目录）
+/neu-box-runtime
+/neu-box-hook
+/neu-box-config
+/dist/
+/*.sha256
+
+# Go
+*.test
+*.out
+
+# 编辑器
+.idea/
+.vscode/
+*.swp

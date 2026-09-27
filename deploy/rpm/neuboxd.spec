@@ -12,6 +12,7 @@ Source0:        %{name}-%{version}-%{release}.tar.gz
 ExclusiveArch:  x86_64 aarch64
 Requires:       /bin/bash
 Requires:       systemd
+Requires:       neu-box-runtime = %{version}-%{release}
 
 # PyInstaller resolves libraries below _internal itself. Do not advertise those
 # private copies as system capabilities or turn their internal edges into host
@@ -29,7 +30,7 @@ Requires:       systemd
 
 %description
 Neu Box Worker runs accelerator jobs and enforces their device isolation.
-This package contains the self-contained worker bundle, native sandbox helper,
+This package contains the matching neubox CLI, self-contained worker bundle, native sandbox helper,
 precompiled BPF object, device information scripts, the deployment acceptance
 suite, configuration, and systemd unit.
 
@@ -44,6 +45,8 @@ rm -rf %{buildroot}
 cp -a rootfs/. %{buildroot}/
 
 test -x %{buildroot}%{_libexecdir}/neu-box/neuboxd/neuboxd
+test -x %{buildroot}/usr/local/bin/neubox
+test -L %{buildroot}/usr/local/bin/neu-sbox
 test -x %{buildroot}%{_libexecdir}/neu-box/neuboxctl/neuboxctl
 test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-sandbox
 test -f %{buildroot}%{_libexecdir}/neu-box/device_block.o
@@ -84,6 +87,8 @@ fi
 
 %files
 %license LICENSE
+%attr(0755,root,root) /usr/local/bin/neubox
+/usr/local/bin/neu-sbox
 %dir %{_libexecdir}/neu-box
 %{_libexecdir}/neu-box/neuboxd
 %{_libexecdir}/neu-box/neuboxctl

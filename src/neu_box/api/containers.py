@@ -9,10 +9,10 @@ supplies the trusted container PID/ID and the sandbox name carried by the
 ``sandbox_cgroup`` annotation; Worker derives the mount namespace and cgroup
 values directly from ``/proc``.
 
-The endpoint is the Worker half of a cross-repo contract: the wire format is
+The endpoint is the Worker half of the runtime contract: the wire format is
 frozen in ``docs/worker-api.md``, the Worker-side flow is in
 ``docs/container-registration.md``, and the runtime half (wrapper, hook) lives
-in the neu_box_runtime repository.
+in ``runtime/neubox``.
 """
 
 from __future__ import annotations
@@ -251,7 +251,7 @@ def register_runtime_container():
     except DockerExecutorError as exc:
         return _runtime_error_response(exc)
     return {
-        "sandbox_name": sandbox_name,
+        "sandbox_name": record["sandbox_name"],
         "container_id": record["container_id"],
         "mount_namespace": record["mount_namespace"],
         "container_cgroup": identity.container_cgroup,

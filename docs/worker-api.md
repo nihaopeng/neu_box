@@ -740,7 +740,7 @@ mount namespace 的 PID 一律拒绝，否则等于把整机登记成受托方�
 | `409` | `runtime_identity_changed` | hook 报的 cgroup / mnt ns 与 Worker 读到的不一致 |
 | `409` | `docker_container_pid_invalid` | PID 不存在或已退出 |
 
-hook 的处理分两类（见 `neu_box_runtime/docs/runtime-hook.md`）：
+hook 的处理分两类（见 `runtime/neubox/docs/runtime-hook.md`）：
 
 * **`sandbox_not_found` / `sandbox_not_active`** → hook 打一行警告后**退 0**，
   容器照常启动但**没有任何授权**：`container_owner` 里没有它的委托，`open` 全被

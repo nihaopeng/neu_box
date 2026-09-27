@@ -1,0 +1,237 @@
+# neu-box-runtime / neu-box-hook：运行时侧行为
+
+这份文档讲 **runtime 这一侧怎么做**：wrapper 怎么注入、hook 怎么登记、装机和
+配置怎么写、哪些验过哪些没验过。
+
+相关实现和契约在同一仓库的其他目录：
+
+| 想看什么 | 去哪 |
+|---|---|
+| `/container/register` 的字段、状态码、错误码、幂等语义；沙盒状态与锁序；为什么必须卡在 ENTRYPOINT 之前 | [`../../../docs/worker-api.md`](../../../docs/worker-api.md)「登记容器归属（runtime hook 专用）」 |
+| Worker 这一侧的流程（谁调、什么时候调、失败会怎样） | [`../../../docs/container-registration.md`](../../../docs/container-registration.md) |
+| 客户端（`neubox`）怎么用、annotation 谁拼的 | [`../../../client/neubox/README.md`](../../../client/neubox/README.md) |
+
+装机步骤（RPM、install.sh、卸载、升级）在 [`../README.md`](../README.md)；
+这份文档只讲**为什么**那些步骤是这个顺序。
+
+## 链路
+
+```
+docker run --annotation sandbox_cgroup=<name> ...
+        │
+        ▼
+   dockerd → containerd → neu-box-runtime（runc wrapper）
+                              │ create 时读 bundle/config.json，
+                              │ 有 annotation 就注入 hook（默认 createRuntime）
+                              ▼
+                          真 runc：建 namespace/cgroup
+                              │
+                              ▼
+                        neu-box-hook（stdin 读 OCI state）
+                              │ 取容器的真实 cgroup / mnt ns
+                              ▼
+                    POST /container/register
+                              │
+        ┌─────────────────────┼─────────────────────┐
+     2xx / 200          404 sandbox_not_found    其它 4xx / 5xx / 超时 / 连不上
+        │              409 sandbox_not_active          │
+   hook 退 0            hook 退 0（打警告）          hook 退非 0
+   登记完成          容器无授权启动（0 张卡）              │
+        │                  │                             ▼
+        │                  │                 runc create 失败，容器不启动
+        ▼                  ▼
+    ENTRYPOINT 执行    ENTRYPOINT 执行
+```
+
+runtime 和 hook **不碰 BPF、不碰数据库**，只负责把可信的运行时身份转交给 Worker。
+
+## neu-box-runtime（runc wrapper）
+
+一个可执行文件，注册进 `daemon.json` 的 `runtimes`，占 runc 的位置，收到和 runc
+完全相同的 argv。
+
+```json
+{
+  "default-runtime": "neu-box-runtime",
+  "runtimes": { "neu-box-runtime": { "path": "/usr/local/bin/neu-box-runtime" } }
+}
+```
+
+键和值都叫 `neu-box-runtime`，和二进制（以及 RPM 包）同名。**别退回短名
+`neu-box`** —— 那个名字同时被运维命令和 OCI runtime 占用过，运维命令已经改名成
+`neu-box-installer`，再留一个短名就又分不清说的是谁了。
+
+**`neu-box-runtime` 是默认 runtime**，用户不需要写 `--runtime`。没带 annotation
+的容器照常启动 —— wrapper 什么都不做，直接转发给真 runc；它会不会拿到设备由 BPF
+决定（没登记就拒绝）。
+
+代价是 wrapper 从此在**这台机器上所有容器**的启动路径上。所以它必须：
+
+- 对任何解析不出来的输入都**原样转发**，绝不因为自己的问题挡住无关容器；
+- 只往 stderr 写日志，不污染 stdout。
+
+### 装机顺序是硬的
+
+`default-runtime` 指向一个不存在或跑不起来的二进制，dockerd 会**起不了任何容器**。
+所以：
+
+- `install.sh` 必须先装好二进制并验证它能执行，**再**改 `daemon.json`；
+- `uninstall.sh` 必须先还原 `daemon.json`，**再**删二进制；
+- 包自己的 `%preun` 守住同一个不变式：`daemon.json` 还指着 `neu-box-runtime`
+  时拒绝 `rpm -e`。
+
+两边都要在改 `daemon.json` 之前备份。`runtimes` / `default-runtime` **不支持热
+加载**，改完必须重启 dockerd，而重启会杀掉这台机器上当时所有运行中的容器 ——
+这一步躲不掉，只能在维护窗口做。
+
+改完拿 `docker info --format '{{.DefaultRuntime}}'` 验：装上之后应当输出
+`neu-box-runtime`，卸干净之后不应再是它。
+
+### 行为
+
+- 只对 `create` 和 `run` 注入，其余子命令（`start`/`state`/`kill`/`delete`/…）
+  逐字转发。containerd 只用 `create`；带上 `run` 是为了本机直接用
+  `runc run` 测时行为和走 Docker 一致。
+- 解析 `--bundle DIR` / `--bundle=DIR` / `-b DIR`（runc 的短别名）三种写法，
+  读 `<bundle>/config.json`。认 `-b` 是为了让"本机用 `runc run` 验证"这条路的
+  现成写法（`runc run -b <bundle>`）走得通；`-b` 在 runc 里也只出现在
+  create/run 上，不会认错。
+- 若 `annotations.sandbox_cgroup` 存在且非空 → 往 `hooks[NEU_BOX_HOOK_PHASE]`
+  （默认 `createRuntime`）**追加**一条本 hook 的记录（已存在同 path 的就不重复加）。
+- 若 annotation 不存在 → **不动 config.json**，也不加 hook。容器照常起来，
+  然后在 BPF 那里被拒（这是设计好的 fail-closed 行为，不是 bug）。
+- 若 annotation 存在、但**注入本身失败**（config.json 读不了/写不回、phase 配错）
+  → **拒绝启动**。判据是"这个容器确认属于某个沙盒"：既然它是受管容器，
+  放它进去就等于让它在没有授权的情况下初始化 NPU 驱动。看不懂的输入（不是
+  create/run、没有 bundle、JSON 坏了）则是另一种情况 —— 一律**原样转发**，
+  不能因为自己的问题挡住无关容器。
+- 写回 config.json 后 `exec` 真 runc，argv 原样。
+- **能力位守卫**（与 annotation 无关，所有 `create`/`run` 容器都过）：容器请求
+  了全套 capabilities（`--privileged` / `--cap-add=ALL`）时，Ascend 驱动
+  （`cann/driver`，`src/sdk_driver/pbl/uda/uda_access.c` 的 `uda_is_admin_task`）
+  会把它判成 **admin**：掩码 `ka_system_get_privileged_kernel_cap()` 在 6.3+
+  内核上是 bits 0..37（`CAP_CHOWN`…`CAP_AUDIT_READ`），比较是**超集**判定，
+  所以只有全套能力位才命中。命中的后果是驱动给这个 mount namespace 建一张
+  **全量** UDA 设备表（按 mnt ns 缓存），而 worker 那套 eBPF 只拦
+  `open("/dev/davinciN")`，驱动这条路径不看它 —— 沙盒隔离静默失效（真机实测：
+  申请 2 张卡的容器里 `torch.npu.device_count() == 8`）。
+  默认 `NEU_BOX_CAP_GUARD=drop`：从 bounding/permitted/effective/ambient 四个
+  集合里剪掉 `CAP_AUDIT_READ`（掩码覆盖得到的最后一位，容器几乎不可能用到），
+  容器即掉出 admin 超集，其余能力位不动。于是受管容器只看到沙盒那几张卡、
+  未登记容器一张都看不到（fail-closed）。`deny` 改成拒绝创建，`off` 关闭
+  （排障用）。
+- 能力位守卫也管 **`exec`**：`docker exec` 那份 capability 不在 bundle 里，
+  而是 containerd 交给 `runc exec --process <file>` 的一份 Process JSON，并且是
+  docker 按容器**自己的 HostConfig 现算**的 —— 跟 create 时被我们剪过的那份
+  spec 无关，实测 exec 进程的 `CapEff` 仍是全量。所以 `exec` 子命令上单独剪
+  同一位。exec 的 Process 里没有 user namespace 信息（那是容器级属性），这里
+  不做 userns 判断 —— 多剪一位本来无害。
+
+## neu-box-hook
+
+由 runc 在 **`createRuntime`** 阶段调用（`NEU_BOX_HOOK_PHASE` 可切回 `prestart`）。
+
+- **从 stdin 读 OCI state**（`{"ociVersion","id","pid","bundle","annotations"}`），
+  不从 argv 读。
+- `sandbox_cgroup` 优先从 state 的 `annotations` 取，取不到再读
+  `<bundle>/config.json`。
+- 向 `<NEU_BOX_WORKER_URL>/container/register` 发请求；body 只有契约里那三个
+  必填字段（`container_id` / `host_pid` / `sandbox_cgroup`），字段含义见
+  [`../../../docs/worker-api.md`](../../../docs/worker-api.md)。
+- **成功 → 退 0。** 例外只有一种：Worker 明确回答"没有这个沙盒 / 这个沙盒正在
+  销毁"（404 `sandbox_not_found` / 409 `sandbox_not_active`）时**放行**，但容器
+  拿不到任何授权 —— BPF 的容器分支查不到委托，`open` 全被拒，驱动给这个 mnt ns
+  建出来的 UDA 表是空的（容器里看不到任何 NPU）。这是 release 之后
+  `docker start` 老容器那条路：容器能起来（可写层还在），要卡得重新 acquire 并
+  重建容器。hook 会往 stderr 打一行明确警告，那是这条路**唯一**的观测点
+  （落在 dockerd/containerd 日志里，容器自己的 `docker logs` 看不到）。
+- **其余任何失败（连不上 Worker、超时、5xx、400、身份冲突 409…）→ 退非 0。**
+  绝不能"登记不上就放行"：放行之后容器里会发生什么、为什么补不回来，见
+  [`../../../docs/container-registration.md`](../../../docs/container-registration.md)；而"拿不到答案"那一类更危险 ——
+  `neuboxctl pause` 的窗口里 BPF 是拆掉的，那时的容器会直接把全部卡拿走。
+- 不从 argv 读、也不额外发 `container_cgroup` / `mount_namespace`：那两个值是
+  Worker 自己从 `/proc/<pid>` 读真值，hook 再报一遍不提供额外信息，报错了反而
+  把登记搞失败（409）。
+
+超时预算：hook 自身 10s（由 wrapper 写进 OCI hook 记录的 `timeout` 字段），其中
+Worker HTTP 请求 8s。**HTTP 超时必须严格小于 hook 的 timeout**（8s < 10s），否则
+runc 杀掉 hook 时连错误信息都拿不到。
+
+## 运行配置
+
+`/etc/neu-box/runtime.env`（角色约定：`/etc/neu-box/<role>.env`，dotenv 格式，
+键一律 `NEU_BOX_*` 前缀）。这份文件由 `neu-box-config` 生成和迁移，**不由 RPM
+安装** —— 一个文件一个写者，包和部署脚本都写过的配置最后谁都不拥有它。仓库里的
+`deploy/config/runtime.env.example` 只是键的文档：
+
+| 键 | 默认值 | 说明 |
+|---|---|---|
+| `NEU_BOX_WORKER_URL` | `http://127.0.0.1:59075` | Worker 地址，hook 往这里登记 |
+| `NEU_BOX_HOOK` | `/usr/local/bin/neu-box-hook` | 注入进 config.json 的 hook 路径 |
+| `NEU_BOX_HOOK_PHASE` | `createRuntime` | 注入到哪个 OCI hook 阶段（`prestart` 可切回，见下面「phase 验证记录」） |
+| `NEU_BOX_REAL_RUNC` | `/usr/local/bin/runc` | wrapper 后面真正接的 runtime |
+
+文件里另有一个 `NEU_BOX_CONFIG_VERSION`：配置 schema 的版本，**和软件版本是两件
+事**。它只增不减，由一个有序的迁移梯子驱动（`internal/config/migrate.go`）。迁移
+在部署时跑（`neu-box-config init`，由 `install.sh` 调用），不在容器创建路径上跑 ——
+runtime 没有常驻进程，"启动时"就是部署那一刻。忘了迁移不会让容器起不来：运行时的
+读取是宽容的，只是文件停在旧版本。
+
+环境变量优先于文件（和 worker 的 `load_dotenv(override=False)` 一致），
+`NEU_BOX_CONFIG=<path>` 可以把程序指到另一个配置文件。
+
+配置文件是主要通道，不是可有可无的备选：hook 是被 runc 拉起来的，继承的是
+**dockerd 的环境**，`docker run -e` 传不进去 —— 这就是配置必须落文件、不能靠
+环境变量的原因。
+
+配置读不动（文件缺失、语法错）不致命：用默认值接着干活，问题打一行 stderr。
+在容器创建路径上因为配置文件打不开就拒绝启动，代价比配错了还大。
+
+**为什么不塞进 `worker.env`**：runtime 是独立包。两个包写同一个配置文件是所有权
+冲突，而且会让 runtime 反向依赖 worker 包。
+
+**一份事实两处描述的地方**：`NEU_BOX_WORKER_URL` 里的端口和 worker.env 的
+`NEU_BOX_PORT` 说的是同一件事，会漂。`install.sh` 生成这份文件时从 `worker.env`
+读端口交给 `neu-box-config`，改端口时两处都要动 —— 没有任何机制替你保持同步。
+
+`NEU_BOX_REAL_RUNC` 必须可配：以后和 Ascend Docker Runtime 串接时，wrapper
+后面接的就不是 runc 了。
+
+## phase 验证记录（别把"验过"的范围说过头）
+
+- **`prestart`**：整条 Docker 链路验过 —— Docker 28.5.2 → containerd 1.7.28 →
+  runc 1.3.3，探针实测 hook 里能读到容器 host PID、容器 mnt ns、
+  `/system.slice/docker-<id>.scope` 及其 inode；hook 退非 0 时容器创建失败、
+  payload 不执行。
+- **`createRuntime`（当前默认）**：**直连 runc 验过**（`runc run -b`，不经过
+  dockerd）—— hook 被调用、能读到容器 mnt ns（`mnt:[4026549739]` ≠ hook 自己的
+  `mnt:[4026531841]`）和容器 cgroup scope 及其 inode、退非 0 时 payload 不执行。
+  phase 是 runc 自己的行为，Docker/containerd 只负责挑 runtime 二进制，
+  所以这一层验过就够。
+- **两个 phase 都没验过的**：整条 Docker 链路上跑 `createRuntime`。真机装机时
+  第一次跑就是它，出问题就把 `NEU_BOX_HOOK_PHASE` 切回 `prestart`（这就是
+  这个开关留着的原因，也是 `prestart` 不能当遗留垃圾删掉的原因）。
+
+选 `createRuntime` 当默认是因为 `prestart` 在 OCI 规范里已废弃，迟早会被
+runc 摘掉。
+
+> **顺带一条实测教训**：两次跑出来的容器 `mnt ns inum` 是同一个数
+> （`mnt:[4026549739]`）—— 第一个容器退出后内核把 inum 回收给了第二个。
+> **光有 inum 分不清"同一个容器"和"回收后重用的号"**，所以 Worker 侧的
+> `ContainerIdentity` 必须带 `init_start_time`（`/proc/<pid>/stat` 第 22 字段，
+> 见 [`../../../docs/container-registration.md`](../../../docs/container-registration.md)）。
+
+## 边界与本轮不做
+
+- **wrapper 在这台机器所有容器的启动路径上**（它是 default-runtime）。它对看不懂
+  的输入一律原样转发，只有"已经确认是沙盒容器（annotation 就在 config.json 里）
+  但注入没做成"才拒绝启动。日志只写 stderr，不碰 stdout。
+- **注入的 phase 默认 `createRuntime`**，`prestart` 可以切回去。别把 `prestart`
+  删掉 —— 它是退路，理由见上面「phase 验证记录」。
+- **hook 只发契约里的三个必填字段**，理由见「neu-box-hook」一节。
+- **与 Ascend Docker Runtime 并存本轮不做。** 它和我们是同一个机制（runc wrapper
+  + 自己的 prestart hook）。它到底是 append 还是 assign `hooks.prestart` 决定能
+  不能简单串接，未验证。`NEU_BOX_REAL_RUNC` 留着就是为了将来能接。
+- 鉴权、Kubernetes 不在本轮范围，见
+  [`../../../docs/container-registration.md`](../../../docs/container-registration.md)「这轮明确不做」；
+  升级流程见 [`../../../docs/deployment.md`](../../../docs/deployment.md)。

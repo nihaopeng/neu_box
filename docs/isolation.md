@@ -7,7 +7,7 @@ UDA 设备表。** 三处必须同时对，隔离才成立；任何一处被绕�
 这份文档讲的是"为什么现在这么做"，不是操作手册。端点字段以
 [`worker-api.md`](worker-api.md) 为准，登记流程的 Worker 侧细节见
 [`container-registration.md`](container-registration.md)，runtime 侧见
-`neu_box_runtime/docs/runtime-hook.md`。
+`runtime/neubox/docs/runtime-hook.md`。
 
 ## 三层，各管一段
 

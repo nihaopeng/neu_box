@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Build the native sandbox, PyInstaller bundles, and the binary RPM."""
+"""Build the Worker, client, and OCI runtime release RPMs."""
 
 from __future__ import annotations
 
 import argparse
 import os
+import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -12,12 +14,58 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD_ROOT = ROOT / "build" / "release"
+BUILD_ROOT = Path(
+    os.environ.get("NEU_BOX_BUILD_ROOT", ROOT / "build" / "release"),
+).expanduser().resolve()
 
 
-def _run(command: list[str], *, cwd: Path = ROOT) -> None:
+def _run(
+    command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None,
+) -> None:
     print("+", " ".join(command), flush=True)
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+def _version() -> str:
+    source = (ROOT / "src" / "neu_box" / "__init__.py").read_text(
+        encoding="utf-8",
+    )
+    match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', source, re.M)
+    if not match:
+        raise SystemExit("cannot read Worker version")
+    return match.group(1)
+
+
+def _build_client(build_dir: Path, version: str) -> Path:
+    source = ROOT / "client" / "neubox"
+    if not (source / "go.mod").is_file():
+        raise SystemExit(f"missing client source: {source}")
+    go = shutil.which("go")
+    if not go:
+        raise SystemExit("missing Go toolchain for the neubox client")
+    build_dir.mkdir(parents=True, exist_ok=True)
+    binary = build_dir / "neubox"
+    architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(
+        platform.machine(),
+    )
+    if not architecture:
+        raise SystemExit(f"unsupported build architecture: {platform.machine()}")
+    environment = os.environ.copy()
+    environment.update({
+        "CGO_ENABLED": "0",
+        "GOOS": "linux",
+        "GOARCH": architecture,
+        "GOTOOLCHAIN": "local",
+        "GOCACHE": str(build_dir / "go-cache"),
+    })
+    symbol = "github.com/neusbox/neu_box/client/neubox/internal/cli.version"
+    _run([
+        go, "build", "-trimpath", "-buildvcs=false", "-tags=netgo,osusergo",
+        "-ldflags", f"-s -w -X {symbol}={version}",
+        "-o", str(binary), "./cmd/neubox",
+    ], cwd=source, env=environment)
+    _run([str(binary), "version"])
+    return binary
 
 
 def _require_pidfd_open() -> None:
@@ -117,6 +165,7 @@ def main() -> int:
         help="compose the binary payload source archive without rpmbuild",
     )
     args = parser.parse_args()
+    version = _version()
 
     native_build = BUILD_ROOT / "native-sandbox"
     pyinstaller_dist = BUILD_ROOT / "pyinstaller-dist"
@@ -128,6 +177,7 @@ def main() -> int:
     _build_deployment_tests(
         pyinstaller_dist, pyinstaller_work / "deployment-tests",
     )
+    client_binary = _build_client(BUILD_ROOT / "client", version)
 
     command = [
         sys.executable,
@@ -139,10 +189,20 @@ def main() -> int:
         "--tests-bundle", str(pyinstaller_dist / "neu-box-deployment-tests"),
         "--sandbox-executable", str(native_build / "neu-box-sandbox"),
         "--bpf-object", str(native_build / "device_block.o"),
+        "--client-executable", str(client_binary),
     ]
     if args.source_only:
         command.append("--source-only")
     _run(command)
+    runtime_command = [
+        "bash", str(ROOT / "runtime" / "neubox" / "deploy" / "rpm" / "build_rpm.sh"),
+        f"--version={version}",
+        f"--release={args.release}",
+        f"--output-dir={Path(args.output_dir).expanduser().resolve()}",
+    ]
+    if args.source_only:
+        runtime_command.append("--source-only")
+    _run(runtime_command)
     return 0
 
 

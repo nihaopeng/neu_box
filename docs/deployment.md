@@ -1,23 +1,31 @@
-# Neu Box Worker 部署与升级手册
+# Neu Box 节点组件部署与升级手册
 
 ## 部署
 
 ```bash
-# 首次安装：安装 RPM，确认配置，再执行 setup
-sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
+# 首次安装：两个同版本 RPM 在一次事务中安装 Worker、client 与 runtime
+sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm ./neu-box-runtime-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env          # 手动配置监听地址、设备过滤器、设备状态脚本等
+sudo bash /usr/libexec/neu-box/runtime/scripts/install.sh --configure-only
 sudo neuboxctl setup              # 检查/迁移数据库，启动 Worker，健康检查通过后恢复调度
+# daemon.json 的更改需要在维护窗口重启 Docker；现有容器会受影响
+sudo systemctl restart docker
 curl -fsS http://127.0.0.1:59075/healthz
 sudo neuboxctl test               # 部署后真机测试
 
 # 升级：先 pause，再安装新包、setup、验收
 sudo neuboxctl pause
-sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
+sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm ./neu-box-runtime-<version>-<release>.<arch>.rpm
+sudo bash /usr/libexec/neu-box/runtime/scripts/install.sh --configure-only
 sudo neuboxctl setup
 sudo neuboxctl test
 ```
 
 `pause` 是升级前必须执行的停服路径：排空任务和沙盒、备份数据库和配置、清理旧 BPF pins 后停止 Worker；`setup` 是唯一启动路径：迁移旧配置和 SQLite schema，加载新版 BPF，`/healthz` 通过后恢复调度。启动和停止统一走 `neuboxctl setup` / `pause`，只读观察使用 `systemctl status`、`journalctl`；等待超时可用 `--timeout <秒>` 调整。
+
+runtime 配置脚本只迁移 `runtime.env` 并验证 wrapper/hook，然后设置
+Docker 的 `default-runtime`；它不会重启 Docker。升级时如果改了 daemon.json，
+也要安排 Docker 重启。部署机不需要 runtime 源码检出，脚本随 runtime RPM 安装。
 
 部署后验收必须在维护窗口以 root 执行，会使用真实 API、任务、设备和容器。
 
@@ -36,7 +44,7 @@ sudo neuboxctl test
 | 权限 | root 或可用的 sudo | 必选 |
 | 必需工具 | `/bin/bash` | 必选 |
 | 设备工具 | 对应厂商的驱动和状态工具，例如 `npu-smi` 或 `nvidia-smi` | 必选 |
-| 容器场景 | Docker、Neu Box OCI runtime/hook（`neu_box_runtime`、`neu-box-hook`） | 可选 |
+| 容器场景 | Docker、`neu-box-runtime` 与 `neu-box-hook` | 可选 |
 
 检查系统依赖：
 
@@ -62,6 +70,7 @@ docker info --format '{{.DefaultRuntime}}'   # 期望 neu-box-runtime
 | 依赖 | 要求 | 用途 |
 |---|---|---|
 | `uv` | - | 管理 Python 依赖和构建环境 |
+| Go | 1.21.4+ | 构建 client 与 OCI runtime/hook |
 | PyInstaller | - | 打包 Worker 与验收套件 |
 | GNU Make | - | 构建 native sandbox |
 | C++17 编译器 | - | 编译 native sandbox |
@@ -84,6 +93,7 @@ command -v pkg-config
 pkg-config --modversion libbpf
 command -v rpmbuild
 command -v readelf
+go version
 ```
 
 构建前如果 shell 里已经激活了别的虚拟环境，先清掉：
@@ -104,10 +114,11 @@ uv run --frozen --group build deploy/build_release.py
 构建完成后检查产物：
 
 ```bash
-ls -l dist/rpm/neuboxd-*.rpm
+ls -l dist/rpm/neuboxd-*.rpm dist/rpm/neu-box-runtime-*.rpm
 
 rpm -qpi dist/rpm/neuboxd-*.rpm
-rpm -qpl dist/rpm/neuboxd-*.rpm | grep -E 'neuboxctl|neu-box-deployment-tests'
+rpm -qpl dist/rpm/neuboxd-*.rpm | grep -E 'neuboxctl|neubox|neu-box-deployment-tests'
+rpm -qpl dist/rpm/neu-box-runtime-*.rpm
 rpm -qpR dist/rpm/neuboxd-*.rpm
 ```
 
@@ -129,6 +140,10 @@ build/release/pyinstaller-dist/neu-box-deployment-tests/neu-box-deployment-tests
 /usr/libexec/neu-box/neu-box-sandbox            native sandbox
 /usr/sbin/neuboxd                                neuboxd 入口符号链接
 /usr/sbin/neuboxctl                              neuboxctl 入口符号链接
+/usr/local/bin/neubox                            Go client（neu-sbox 是符号链接）
+/usr/local/bin/neu-box-runtime                   OCI runtime wrapper
+/usr/local/bin/neu-box-hook                      OCI hook
+/usr/local/bin/neu-box-config                    runtime 配置工具
 /usr/lib/systemd/system/neuboxd.service         systemd unit
 
 # 配置：setup 迁移旧键，不覆盖自定义值

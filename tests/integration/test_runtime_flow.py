@@ -274,7 +274,7 @@ def test_hook_rejects_annotation_pointing_at_a_live_sandbox_path(monkeypatch, ap
     assert manager.db.containers == {}
 
 
-def test_hook_rejects_namespace_already_bound_elsewhere(monkeypatch, app):
+def test_hook_keeps_existing_binding_when_annotation_differs(monkeypatch, app):
     manager = _manager({**_sandbox(SANDBOX), **_sandbox(OTHER_SANDBOX)})
     _install(monkeypatch, manager)
     hook_pid = os.getppid()
@@ -285,8 +285,9 @@ def test_hook_rejects_namespace_already_bound_elsewhere(monkeypatch, app):
     # 同一个 mount namespace 换了 container_id：容器重建后旧登记还没清掉。
     rebuilt = _hook_register(app, host_pid=hook_pid, container_id='b' * 64)
 
-    assert elsewhere.status_code == 409
-    assert elsewhere.get_json()['code'] == 'docker_container_registered_elsewhere'
+    assert elsewhere.status_code == 200
+    assert elsewhere.get_json()['status'] == 'already_registered'
+    assert elsewhere.get_json()['sandbox_name'] == SANDBOX
     assert rebuilt.status_code == 409
     assert rebuilt.get_json()['code'] == 'docker_container_registered_elsewhere'
     assert len(manager.db.containers) == 1

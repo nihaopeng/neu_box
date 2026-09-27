@@ -363,6 +363,12 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_BUILD / "native-sandbox" / "device_block.o",
     )
     parser.add_argument(
+        "--client-executable",
+        type=_path,
+        default=DEFAULT_BUILD / "client" / "neubox",
+        help="prebuilt Go client from client/neubox",
+    )
+    parser.add_argument(
         "--info-dir",
         type=_path,
         default=ROOT / "src" / "neu_box" / "resources" / "info",
@@ -469,6 +475,18 @@ def _validate_args(args: argparse.Namespace) -> None:
             "directory"
         )
     _validate_bpf_object(args.bpf_object)
+    _require_file(args.client_executable, "Go client", executable=True)
+    client_headers = _elf_headers(args.client_executable, "Go client")
+    if client_headers.get("Machine") != _expected_elf_machine():
+        raise SystemExit("Go client architecture does not match the RPM")
+    client_version = _capture(
+        [str(args.client_executable), "version"], "checking Go client version",
+    ).strip()
+    if client_version != args.version:
+        raise SystemExit(
+            f"Go client version {client_version!r} does not match RPM "
+            f"Version {args.version!r}"
+        )
     _require_dir(args.info_dir, "device info script directory")
     info_scripts = list(args.info_dir.glob("*_info.sh"))
     if not info_scripts:
@@ -521,6 +539,9 @@ def _compose_source(args: argparse.Namespace, topdir: Path) -> tuple[Path, Path]
         rootfs / "usr" / "libexec" / "neu-box" / "device_block.o",
         0o644,
     )
+    client = rootfs / "usr" / "local" / "bin" / "neubox"
+    _copy_file(args.client_executable, client, 0o755)
+    (client.parent / "neu-sbox").symlink_to("neubox")
     _copy_tree(args.info_dir, rootfs / "usr" / "share" / "neu-box" / "info")
     for script in (rootfs / "usr" / "share" / "neu-box" / "info").glob(
         "*_info.sh"
@@ -558,6 +579,7 @@ def _compose_source(args: argparse.Namespace, topdir: Path) -> tuple[Path, Path]
     )
     manifest = {
         "component": "neuboxd",
+        "bundled_components": ["worker", "client"],
         "version": args.version,
         "release": args.release,
         "api_version": 2,

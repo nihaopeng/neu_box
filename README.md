@@ -19,7 +19,7 @@ Neu Box 为 GPU、NPU 等异构设备节点提供统一的资源入口。它将�
 cgroup v2 进程隔离、eBPF 访问控制、异步任务队列和发布运维组合为一个节点侧
 Worker，同时提供 WebUI、命令行客户端和面向 Agent 的标准 HTTP 使用方式。
 
-本仓库是 Neu Box 的核心 Worker，也是三个独立仓库的聚合与兼容性验证仓库。
+本仓库同时维护 Worker、Go 客户端和 OCI runtime；WebUI 独立维护。
 
 ## 核心能力
 
@@ -30,7 +30,7 @@ Worker，同时提供 WebUI、命令行客户端和面向 Agent 的标准 HTTP �
 | 设备仲裁 | 综合 Neu Box 分配记录与驱动侧外部占用信息，避免把忙碌设备重复分配 |
 | 内核访问控制 | 通过 cgroup v2 与 eBPF 限制未获授权进程后续打开已预留设备 |
 | RPM 生命周期 | 使用架构相关 RPM 管理程序文件，以显式数据库迁移和健康检查完成部署 |
-| Agent 接入 | Worker API v2 可直接通过 `curl` 使用；`neu-sbox` 提供可选的确定性 helper 与内置 skill |
+| Agent 接入 | Worker API v2 可直接通过 `curl` 使用；`neubox` 提供确定性的命令行接口 |
 
 ## 系统架构
 
@@ -38,24 +38,21 @@ Worker，同时提供 WebUI、命令行客户端和面向 Agent 的标准 HTTP �
 flowchart LR
     Browser[浏览器] --> WebUI[Neu Box WebUI<br/>:25565]
     WebUI --> Worker[Neu Box Worker API<br/>:59075]
-    CLI[neu-sbox CLI] --> Worker
+    CLI[neubox CLI] --> Worker
     Agent[Agent / curl] --> Worker
     Worker --> Queue[任务队列与日志]
     Worker --> Sandbox[cgroup v2 / eBPF 沙盒]
     Sandbox --> Device[GPU / NPU 设备]
 ```
 
-Neu Box 由三个独立维护、独立发版的仓库组成。它们不共享运行时代码，仅通过
-HTTP 契约协作：
+Neu Box 由本仓库和 WebUI 仓库组成：
 
 | 仓库 | 职责 | 部署方式 |
 |---|---|---|
-| **[neu_box](https://github.com/neusbox/neu_box)** | Worker、设备沙盒、任务执行、RPM 与聚合测试 | 架构相关 RPM |
+| **[neu_box](https://github.com/neusbox/neu_box)** | Worker、设备沙盒、`neubox` 客户端、OCI runtime 与聚合测试 | 同版本的 Worker/client 和 runtime RPM |
 | **[neu_box_webui](https://github.com/neusbox/neu_box_webui)** | 节点池、任务转发、实验记录与 Web 界面 | Python 3.11+ 源码运行 |
-| **[neu_box_goClient](https://github.com/neusbox/neu_box_goClient)** | `neu-sbox` CLI 与 Agent skill | Go 静态二进制 |
 
-本仓库通过 `thirds/webui` 和 `thirds/goClient` submodule 固定已验证的配套提交，
-作为跨仓库兼容矩阵。
+本仓库通过 `thirds/webui` submodule 固定已验证的 WebUI 提交。
 
 ## 快速开始
 
@@ -69,23 +66,27 @@ HTTP 契约协作：
 - 对应厂商的设备驱动和状态工具，例如 `nvidia-smi` 或 `npu-smi`
 - Docker 仅在需要容器执行目标时需要
 
-### 安装 Worker
+### 安装节点组件
 
 从 [GitHub Releases](https://github.com/neusbox/neu_box/releases) 下载与目标机器
-架构匹配的 `neuboxd` RPM：
+架构匹配、版本相同的 `neuboxd` 与 `neu-box-runtime` RPM：
 
 ```bash
-sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
+sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm ./neu-box-runtime-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env
+sudo bash /usr/libexec/neu-box/runtime/scripts/install.sh --configure-only
 sudo neuboxctl setup
+# Docker 默认 runtime 配置需要在维护窗口重启 dockerd 后才生效
+sudo systemctl restart docker
 curl -fsS http://127.0.0.1:59075/healthz
 sudo neuboxctl test            # 维护窗口内：真实任务与设备的实机验收
 ```
 
 `neuboxctl setup` 迁移并检查数据库，以暂停状态启动 Worker；Worker 加载
 BPF，通过健康检查后恢复调度。默认等待启动 60 秒，可用 `--timeout` 调整。
-Worker 默认监听 `0.0.0.0:59075`，安装后的运维入口是
-`/usr/sbin/neuboxctl`。
+Worker 默认监听 `0.0.0.0:59075`，运维入口是 `/usr/sbin/neuboxctl`；
+客户端是 `/usr/local/bin/neubox`。配置 runtime 时脚本会验证二进制、生成
+`runtime.env` 并设置 Docker 默认 runtime，但不会自行重启 dockerd。
 
 `setup` 通过后跑 `neuboxctl test` 做验收：套件随 RPM 安装在
 `/usr/libexec/neu-box/tests/`，是一个自带 pytest 的 PyInstaller 产物（部署机不需要
@@ -118,7 +119,8 @@ systemd 拒绝，因为直接停服务会跳过排空、备份和旧 BPF 清理�
 
 ```bash
 sudo neuboxctl pause
-sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
+sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm ./neu-box-runtime-<version>-<release>.<arch>.rpm
+sudo bash /usr/libexec/neu-box/runtime/scripts/install.sh --configure-only
 sudo neuboxctl setup
 ```
 
@@ -131,28 +133,24 @@ Worker 保持在线且暂停，不会自动杀任务或继续升级。
 [部署与升级手册](docs/deployment.md)；native helper、BPF maps 和设备预留语义见
 [沙盒说明](docs/sandbox.md)。
 
-## 使用 `neu-sbox`
+## 使用 `neubox`
 
-`neu-sbox` 直连 Worker，不经过 WebUI：
+`neubox` 直连 Worker，不经过 WebUI；`neu-sbox` 是兼容命令名：
 
 ```bash
 # 检查 Worker 和 API 兼容性
-neu-sbox check
+neubox check
 
 # 当前终端独占两张设备卡
-neu-sbox acquire --device-num 2
-neu-sbox release <sandbox_name>
+neubox acquire --device-num 2
+neubox release <sandbox_name>
 
 # 提交四卡任务并增量跟踪日志
-neu-sbox submit --device-num 4 --priority 1 -- python train.py
-neu-sbox wait <task_id>
-
-# 将内置 Agent skill 安装到指定技能根目录
-neu-sbox skill install ~/.codex/skills
+neubox submit --device-num 4 --priority 1 -- python train.py
+neubox wait <task_id>
 ```
 
-安装与完整参数说明见
-[neu_box_goClient](https://github.com/neusbox/neu_box_goClient)。
+完整参数见 [客户端说明](client/neubox/README.md)。
 
 ## HTTP API
 
@@ -185,10 +183,10 @@ curl http://127.0.0.1:59075/status
 |---|---|---|
 | Worker | `0.5.x` | `api_version = 2` |
 | WebUI | `0.1.x` | Worker `>= 0.4.0` |
-| `neu-sbox` | `0.2.x` | Worker `>= 0.4.0` |
+| `neubox` 与 OCI runtime | 与 Worker 同版本 | 同一源码快照构建、同次安装 |
 
 `API_VERSION` 只在发生破坏性 HTTP 契约变更时递增。部署前可使用
-`neu-sbox check` 或 `/healthz` 验证兼容性。
+`neubox check` 或 `/healthz` 验证兼容性。
 
 ## 隔离边界
 
@@ -233,10 +231,12 @@ uv run --frozen python tests/deployment/run.py --url http://127.0.0.1:59075
 
 ```text
 src/neu_box/          Worker 应用、任务执行、沙盒与设备管理
+client/neubox/        Go 命令行客户端
+runtime/neubox/       Go OCI runtime、hook、配置工具及 RPM
 native/sandbox/       C++17 沙盒 CLI、libbpf 用户态实现与 BPF 源码
 deploy/               RPM 构建、配置和 systemd unit
 docs/                 API、部署、配置、测试与数据库迁移文档
-thirds/               WebUI 与 Go Client 的兼容性 submodule
+thirds/webui/         WebUI submodule
 ```
 
 ## 文档
@@ -247,15 +247,15 @@ thirds/               WebUI 与 Go Client 的兼容性 submodule
 | [Worker 配置](docs/configuration.md) | `worker.env` 变量、旧键迁移与生效方式 |
 | [Worker 测试](docs/testing.md) | 单元、集成、native 与发布前测试 |
 | [Worker HTTP API](docs/worker-api.md) | API v2 契约、任务、日志和终端沙盒 |
-| [容器归属登记](docs/container-registration.md) | `/container/register` 的 Worker 侧流程、锁序与失败语义（runtime 侧见 neu_box_runtime） |
+| [容器归属登记](docs/container-registration.md) | `/container/register` 的 Worker 侧流程、锁序与失败语义；runtime 侧见 [runtime hook](runtime/neubox/docs/runtime-hook.md) |
 | [设备隔离原理](docs/isolation.md) | 预留表 / mnt ns 委托 / 驱动 UDA 表三层怎么合起来保证隔离，以及 release、exec、stop→start 各条路径的结论 |
 | [数据库迁移手册](docs/database-migrations.md) | Schema 版本、迁移开发与部署检查 |
 
 ## 版本与发布
 
-- Worker 版本定义在 `src/neu_box/__init__.py`
+- 发布版本定义在 `src/neu_box/__init__.py`，构建时注入客户端和 runtime
 - 构建入口为 `deploy/build_release.py`，产物写入 `dist/rpm/`
-- GitHub Release 使用 `v<version>` tag，并为 x86_64、aarch64 分别发布对应 RPM
+- GitHub Release 使用 `v<version>` tag，并为 x86_64、aarch64 分别发布两种 RPM
 - RPM 的 Version 取自 `src/neu_box/__init__.py`；修订构建应递增 Release
 
 ## 参与项目

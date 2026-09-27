@@ -60,10 +60,9 @@ stderr。
 
 ## 容器
 
-这两个容器快捷命令目前是预留接口，**本仓库的发布包尚未安装
-OCI runtime/hook，Worker 也尚未提供 container intent 端点**。在补齐之前，
-请使用 `neubox submit --image IMAGE -- ...` 让 Worker 创建一次性容器；
-不要将 `neubox docker run/start` 用于生产任务。下文记录的是预期契约。
+容器快捷命令使用同仓的 Worker API 和 OCI runtime/hook。部署时要安装
+Worker/client 与 runtime 两个 RPM，配置 Docker 默认 runtime，并在维护窗口重启
+dockerd；步骤见 [部署手册](../../docs/deployment.md)。
 
 容器要拿到设备，**必须带 `sandbox_cgroup` annotation**：Worker 靠它把容器登记到
 沙盒名下，没登记的容器即使卡空着也一律拿不到设备（fail-closed）。annotation 是
@@ -86,8 +85,8 @@ docker run --annotation sandbox_cgroup=<沙盒名> --rm -it ubuntu bash
 沙盒名按本进程 PID 反查（`GET /sandbox/status?pid=<自己>`）；查不到直接报错，
 不会退化成"不加 annotation 照样起"。
 
-完整实现后会由安装器部署 `neu-box-runtime` 并配置 Docker；当前发布包
-尚未执行这一步。
+`neu-box-runtime` 随配套 runtime RPM 安装；runtime 配置脚本会检查 hook 与
+真正的 runc，再设置 Docker 的 `default-runtime`。
 
 `docker run` 以外的 docker 子命令（build / ps / compose / …）不支持，同样直接
 写原生 docker，或者继续用 Worker 的 `submit --image`。
@@ -135,23 +134,8 @@ neubox wait TASK_ID --interval 5s --timeout 2h
 - 有 `api_version` 但 < 2 → 退出码 1（不兼容）
 - 无 `api_version` 字段（旧版 worker）→ 退出码 1（不支持 `/tasks`）
 
-### 当前已知兼容性缺口
-
-客户端源码保留了上游已定义的新能力，但本次回并不修改 Worker；
-以下服务端契约由 Worker 负责人后续补齐：
-
-| 客户端能力 | 依赖的 Worker 端点 | 现状 |
-|---|---|---|
-| acquire 资源不足时排队 | `GET /sandbox/acquire/<id>` | 当前 Worker 仍是同步申请 |
-| 统一单条取消 | `DELETE /tasks/<id>?kind=task\|acquire` | 尚未实现 |
-| `docker run` 按 PID 反查沙盒 | `GET /sandbox/status?pid=...` | 尚未实现 |
-| `docker run` annotation 生效 | OCI runtime/hook 读取 `sandbox_cgroup` | 发布包尚未包含该 runtime/hook |
-| `docker start` 借条式改绑 | `POST /container/intent`、`GET /container/intent` + runtime/hook 消费 | 尚未实现 |
-
-基础的同步 acquire/release、任务提交、查询、日志和 wait 与当前
-Worker API v2 兼容。
-
-API 契约见本仓库 `docs/worker-api.md`。
+排队 acquire、单条取消、按 PID 查询沙盒、容器登记与 start 借条均在本仓库的
+Worker API v2 中实现；接口细节见 [Worker API](../../docs/worker-api.md)。
 
 ## 构建与安装
 
@@ -165,11 +149,9 @@ go test ./... && go vet ./...
 sudo install -m 0755 neubox /usr/local/bin/neubox
 ```
 
-正常部署不需要手工构建：`deploy/build_release.py` 会为发布包构建静态
-`neubox`（与 Worker 同版本），安装器把它放到
-`/opt/neu-box/current/share/neu-box/client/neubox`，并维护
-`/usr/local/bin/neubox` 与兼容符号链接 `/usr/local/bin/neu-sbox`
-（升级/回滚只切 `current`，两个入口始终指向当前版本）。
+正常部署不需要手工构建：仓库根的 `deploy/build_release.py` 会构建静态
+`neubox` 并放入 `neuboxd` RPM。安装后是 `/usr/local/bin/neubox`，
+`/usr/local/bin/neu-sbox` 是兼容符号链接；与 Worker 一起升级。
 
 | 变量 | 说明 |
 |---|---|
@@ -193,6 +175,6 @@ neubox tasks --all           # 含较早结束的任务
 neubox wait <task_id>
 neubox result --json <task_id>
 
-# 容器任务（当前可用的 Worker 执行路径）
+# 容器任务
 neubox submit --image ubuntu -- bash
 ```
