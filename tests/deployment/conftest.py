@@ -4,7 +4,7 @@
 ``pytest.fail`` 并把缺的东西写进消息 —— 这是部署验收，不是开发机上的便利
 测试。``tests/integration/`` 那两层的 skip 语义在这里是反的。
 
-七个文件就是七个组，按"越靠后越贵"排（``_FILE_ORDER``）：基本盘（不碰卡）→
+十个文件就是十个组，按"越靠后越贵"排（``_FILE_ORDER``）：基本盘（不碰卡）→
 单卡 → 多卡 → 调度 → 容器 → 收尸（要跨收尸周期）→ 维护（停/起服，独占，必须
 最后）。pytest 默认按文件名字母序收集，和这个顺序不一样（``scheduling`` 会插到
 ``single_device`` 前面、``reaper`` 会跑到最后），所以顺序在这里显式钉住。
@@ -18,6 +18,7 @@ test`` 与 ``tests/deployment/run.py`` 都会设置）时才收集。
 from __future__ import annotations
 
 import functools
+import json
 import os
 import re
 import shutil
@@ -50,8 +51,8 @@ _FILE_ORDER = (
     "test_multi_device.py",   # 3. 多卡
     "test_scheduling.py",     # 4. 调度与优先级
     "test_containers.py",     # 5. 容器 / OCI runtime
-    "test_client.py",         # 6. client(neubox) 基本路径：前置软缺失，没装就跳过
-    "test_client_docker.py",  # 7. client 的容器路径：docker run / stop / start / release
+    "test_client.py",         # 6. client(neubox) 基本路径与 shell
+    "test_client_docker.py",  # 7. client 容器路径：run / start / restart / status
     "test_driver_isolation.py",  # 8. 驱动侧隔离：读 /proc/uda 验 UDA 表
     "test_reaper.py",         # 9. 收尸：每条都要跨收尸周期
     "test_maintenance.py",    # 10. 停机维护：停/起服，必须最后
@@ -65,8 +66,9 @@ _FILE_ORDER = (
 # 既不取消也不按 130 退），用例 66 会间歇性失败。0.3.2 起有 `docker start`
 # （借条式改绑，用例 84/85），老客户端没有这个子命令；0.3.3 起借不上沙盒也照常
 # start（只打警告）—— 0.3.2 有段时间同时存在"拦住 start"和"放行 start"两份
-# 二进制，版本号一样，所以这里按 0.3.3 卡。
-MIN_NEUBOX_VERSION = (0, 3, 3)
+# 二进制，版本号一样。0.5.0 起还要验 shell / docker status / restart，因此整组
+# 使用与当前 Worker RPM 同版本的客户端。
+MIN_NEUBOX_VERSION = (0, 5, 0)
 
 
 def client_binary() -> str:
@@ -74,29 +76,37 @@ def client_binary() -> str:
     override = os.environ.get("NEU_BOX_CLIENT_BIN", "").strip()
     if override:
         return override if os.path.exists(override) else ""
+    installed = "/usr/local/bin/neubox"  # 同一 RPM 的固定安装路径
+    if os.path.isfile(installed) and os.access(installed, os.X_OK):
+        return installed
     return shutil.which("neubox") or ""
 
 
 @functools.lru_cache(maxsize=4)
 def neubox_version(path: str) -> tuple[int, ...] | None:
-    """跑 ``neubox version`` 解析出元组版本号；解析不了返回 None。"""
+    """读 ``neubox --json version``；解析不了返回 None。"""
     try:
         result = subprocess.run(
-            [path, "version"], capture_output=True, text=True, timeout=10,
+            [path, "--json", "version"], capture_output=True, text=True,
+            timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
+        if result.returncode != 0:
+            return None
+        version = json.loads(result.stdout).get("version", "")
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError,
+            AttributeError):
         return None
-    match = re.search(r"(\d+)\.(\d+)\.(\d+)", result.stdout or "")
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", str(version))
     if not match:
         return None
     return tuple(int(part) for part in match.groups())
 
 
 def describe_neubox() -> str:
-    """报告头里的那一行 —— 明确区分"跑了"和"跳过了"。"""
+    """报告头里的 neubox 版本与缺失状态。"""
     path = client_binary()
     if not path:
-        return "neubox:       (未安装 → client 组会跳过)"
+        return "neubox:       (未安装 → client 组会失败)"
     version = neubox_version(path)
     if version is None:
         return f"neubox:       {path} (version 输出无法解析)"
@@ -387,19 +397,15 @@ def reaper_ready(deployment: Deployment, single_card: Deployment) -> Deployment:
 def neubox_bin(deployment: Deployment) -> str:
     """client(neubox) 组的前置：二进制存在**且版本达标**。
 
-    这是本层唯一允许"缺前置就跳过"的组：neubox 是另一个仓库的产物，worker 的
-    发布流程不该因为部署机上没装它而失败（跳过原因会打印在报告头与 ``-ra`` 摘要
-    里，避免"一直跳过却没人发现"）。
-
-    但"装了却版本不够"按**失败**处理：这个版本没有 ``cancel`` / release
-    ``host_pid`` 等本次新增的行为，跑下去只会得到一堆看不懂的失败 —— 装作能用
-    比没装更危险。
+    client 与 Worker 已由同一个 RPM 安装；缺失或版本过低都应使部署验收失败，
+    否则 ``neuboxctl test`` 会跳过最需要验证的交互路径。
     """
     path = client_binary()
     if not path:
-        pytest.skip(
-            "neubox 不存在：跳过 client 组（安装 neubox，或用 NEU_BOX_CLIENT_BIN "
-            "指定二进制路径后重跑）"
+        pytest.fail(
+            "前置缺失：neubox 不存在；请检查 RPM 安装，或用 "
+            "NEU_BOX_CLIENT_BIN 指定二进制路径",
+            pytrace=False,
         )
     version = neubox_version(path)
     if version is None:
@@ -410,9 +416,9 @@ def neubox_bin(deployment: Deployment) -> str:
     if version < MIN_NEUBOX_VERSION:
         pytest.fail(
             f"neubox {path} 是 {'.'.join(map(str, version))}，低于要求的 "
-            f"{'.'.join(map(str, MIN_NEUBOX_VERSION))}：client 组需要 cancel 与 "
-            f"release host_pid 等新行为，请升级 neubox（或设 NEU_BOX_CLIENT_BIN "
-            f"指向新版）",
+            f"{'.'.join(map(str, MIN_NEUBOX_VERSION))}：client 组需要 shell "
+            f"和 docker status/restart；请升级 neubox（或设 "
+            f"NEU_BOX_CLIENT_BIN 指向新版）",
             pytrace=False,
         )
     return path

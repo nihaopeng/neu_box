@@ -485,9 +485,16 @@ def _validate_args(args: argparse.Namespace) -> None:
     client_headers = _elf_headers(args.client_executable, "Go client")
     if client_headers.get("Machine") != _expected_elf_machine():
         raise SystemExit("Go client architecture does not match the RPM")
-    client_version = _capture(
-        [str(args.client_executable), "version"], "checking Go client version",
-    ).strip()
+    client_version_json = _capture(
+        [str(args.client_executable), "--json", "version"],
+        "checking Go client version",
+    )
+    try:
+        client_version = json.loads(client_version_json)["version"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise SystemExit(
+            f"Go client did not return a JSON version: {client_version_json!r}"
+        ) from exc
     if client_version != args.version:
         raise SystemExit(
             f"Go client version {client_version!r} does not match RPM "

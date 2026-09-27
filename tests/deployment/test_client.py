@@ -7,13 +7,15 @@ CLI，所以 client 自己的参数拼装、退出码、轮询与取消逻辑一
 容器路径（`neubox docker run` 与 stop / start / release / exec 生命周期）单独一组：
 它要 dockerd + `neu-box-runtime`，见 `test_client_docker.py`。这一组只要卡。
 
-前置是软缺失：``neubox`` 没装就整组跳过并打印原因；装了但版本不够直接失败。
+前置：同一 RPM 安装的 ``neubox`` 必须存在且版本达标，否则部署验收失败。
 """
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
+import shlex
 import signal
 import subprocess
 import time
@@ -48,6 +50,34 @@ def test_client_acquire_list_release_roundtrip(neubox_bin, single_card):
     assert single_card.idle_devices() == baseline, (
         f"release 之后卡没有全部回到空闲池: {single_card.idle_devices()} != {baseline}"
     )
+
+
+def test_client_shell_child_inherits_card_and_exit_releases_it(
+        neubox_bin, single_card):
+    """真 neubox shell：子 shell 能查到卡，退出后沙盒和占卡自动消失。"""
+    baseline = single_card.idle_devices()
+    device = single_card.require_idle(1)[0]
+    environment = dict(os.environ, SHELL="/bin/sh")
+    result = subprocess.run(
+        [neubox_bin, "shell", "--device", str(device)],
+        input=f"{shlex.quote(neubox_bin)} status\nexit\n",
+        capture_output=True, text=True, timeout=120, env=environment,
+    )
+    output = f"{result.stdout}\n{result.stderr}"
+    match = re.search(r"sandbox:\s+(sbx_\S+\.slice)", output)
+    assert match, f"shell 没报告新沙盒：\n{output[:2000]}"
+    sandbox = match.group(1)
+    single_card.track_sandbox(sandbox)  # 失败时只清理本用例新建的沙盒
+    assert result.returncode == 0, (
+        f"neubox shell 退出码 {result.returncode}：\n{output[:2000]}"
+    )
+    assert output.count(f"sandbox: {sandbox}") >= 2, (
+        f"子 shell 里的 neubox status 没看到自己的沙盒：\n{output[:2000]}"
+    )
+    assert "released" in output, f"退出时没有自动释放结果：\n{output[:2000]}"
+    single_card.wait_sandbox_gone(sandbox)
+    single_card.created_sandboxes.remove(sandbox)
+    single_card.wait_idle_at_least(baseline)
 
 
 def test_client_submit_and_result(neubox_bin, single_card):
