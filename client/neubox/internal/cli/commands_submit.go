@@ -257,28 +257,43 @@ func (a *app) submitCommand(options submitOptions) int {
 		_ = printJSON(a.out, raw)
 		return 0
 	}
-	fmt.Fprintln(a.out, "[neubox] 任务已提交")
-	fmt.Fprintf(a.out, "    ID=%s\n", response.TaskID)
-	fmt.Fprintf(a.out, "    queue_position: #%d\n", response.Position)
-	if response.Priority > 0 {
-		fmt.Fprintf(a.out, "    priority: %d\n", response.Priority)
+	fields := []outputField{
+		{"result", "submitted"},
+		{"task", response.TaskID},
+		{"position", fmt.Sprintf("#%d", response.Position)},
 	}
+	if response.Priority > 0 {
+		fields = append(fields, outputField{"priority", fmt.Sprint(response.Priority)})
+	}
+	deviceText := formatDevices(options.deviceIDs)
+	if len(options.deviceIDs) == 0 && options.deviceNum > 0 {
+		deviceText = fmt.Sprintf("requested %d", options.deviceNum)
+	}
+	memoryText := "0"
+	if options.memory > 0 {
+		memoryText = fmt.Sprintf("%dG", options.memory)
+	}
+	fields = append(fields,
+		outputField{"devices", deviceText},
+		outputField{"cpu", formatCPU(options.cpu)},
+		outputField{"memory", formatMemory(memoryText)},
+	)
 	if payload.Target != nil {
 		if payload.Target.Type == "docker" {
-			fmt.Fprintf(a.out, "    image: %s\n", payload.Target.Image)
+			fields = append(fields, outputField{"image", payload.Target.Image})
 			for _, mount := range payload.Target.Mounts {
 				mode := "read-only"
 				if !mount.ReadOnly {
 					mode = "writable"
 				}
-				fmt.Fprintf(a.out, "    mount: %s → %s (%s)\n", mount.Source, mount.Target, mode)
+				fields = append(fields, outputField{"mount", fmt.Sprintf("%s → %s (%s)", mount.Source, mount.Target, mode)})
 			}
 		} else if payload.Target.Workdir != nil {
-			fmt.Fprintf(a.out, "    workdir: %s\n", *payload.Target.Workdir)
+			fields = append(fields, outputField{"workdir", *payload.Target.Workdir})
 		}
 	}
-	fmt.Fprintf(a.out, "    command: %s\n", options.command)
-	fmt.Fprintf(a.out, "    follow: neubox wait %s\n", response.TaskID)
+	fields = append(fields, outputField{"command", options.command})
+	printFields(a.out, fields...)
 	if options.wait {
 		return a.runWait([]string{response.TaskID})
 	}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/neusbox/neu_box/client/neubox/internal/api"
 )
@@ -22,11 +24,52 @@ func (a *app) workerFailure(status int, raw []byte) int {
 		_ = printJSONValue(a.errOut, output)
 		return 1
 	}
-	fmt.Fprintf(a.errOut, "[neubox] 操作失败 (HTTP %d): %s\n", status, message)
+	fields := []outputField{{"error", message}, {"http_status", strconv.Itoa(status)}}
 	if code != "" {
-		fmt.Fprintf(a.errOut, "    code: %s\n", code)
+		fields = append(fields, outputField{"code", code})
 	}
+	printFields(a.errOut, fields...)
 	return 1
+}
+
+type outputField struct {
+	key   string
+	value string
+}
+
+// printFields is the one human-readable output layout: two flush-left columns
+// with labels aligned. --json remains the contract for machine consumers.
+func printFields(writer io.Writer, fields ...outputField) {
+	width := 0
+	for _, field := range fields {
+		if len(field.key) > width {
+			width = len(field.key)
+		}
+	}
+	for _, field := range fields {
+		fmt.Fprintf(writer, "%-*s %s\n", width+1, field.key+":", field.value)
+	}
+}
+
+func formatDevices(devices []string) string {
+	if len(devices) == 0 {
+		return "none"
+	}
+	return strings.Join(devices, ", ")
+}
+
+func formatCPU(cpu int) string {
+	if cpu == 0 {
+		return "unlimited"
+	}
+	return strconv.Itoa(cpu)
+}
+
+func formatMemory(memory string) string {
+	if memory == "" || memory == "0" {
+		return "unlimited"
+	}
+	return memory
 }
 
 func printJSON(writer io.Writer, raw []byte) error {

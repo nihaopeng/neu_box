@@ -87,10 +87,6 @@ func parseAcquireOptions(args []string) (acquireOptions, error) {
 }
 
 func (a *app) runTerminalAcquire(options acquireOptions) int {
-	return a.runTerminalAcquireWithMode(options, false)
-}
-
-func (a *app) runTerminalAcquireWithMode(options acquireOptions, autoRelease bool) int {
 	a.acquiredSandbox = ""
 	shellPID := a.getPPID()
 	if options.pidSet {
@@ -172,20 +168,19 @@ func (a *app) runTerminalAcquireWithMode(options acquireOptions, autoRelease boo
 	if interrupted || interruptPending() {
 		// 卡已经拿到、但用户在请求飞行途中就按了 Ctrl-C：意图是"不要了"，
 		// 所以把刚建的沙盒释放掉再按 130 退出 —— 不能把一张卡留在场上。
-		fmt.Fprintln(a.errOut, "[neubox] 收到 Ctrl-C，释放刚创建的沙盒")
+		a.printWarning("acquire_interrupted", "收到 Ctrl-C，释放刚创建的沙盒")
 		status, raw, err := a.worker.Request(http.MethodPost, "/sandbox/release", nil, map[string]any{
 			"sandbox_name": response.SandboxName,
 			"host_pid":     a.getPID(),
 		})
 		if err != nil {
-			fmt.Fprintf(a.errOut, "释放沙盒 %s 失败: %v（请手动 neubox release %s）\n",
-				response.SandboxName, err, response.SandboxName)
+			a.printError("sandbox_release_failed", fmt.Sprintf("释放沙盒 %s 失败: %v；请手动 neubox release %s",
+				response.SandboxName, err, response.SandboxName))
 		} else if apiErr := api.ResponseError(status, raw); apiErr != nil {
-			fmt.Fprintf(a.errOut, "释放沙盒 %s 失败: HTTP %d %s（请手动 neubox release %s）\n",
-				response.SandboxName, status, strings.TrimSpace(string(raw)),
-				response.SandboxName)
+			a.printError("sandbox_release_failed", fmt.Sprintf("释放沙盒 %s 失败: HTTP %d %s；请手动 neubox release %s",
+				response.SandboxName, status, strings.TrimSpace(string(raw)), response.SandboxName))
 		} else {
-			fmt.Fprintf(a.out, "[neubox] 沙盒已释放: %s\n", response.SandboxName)
+			printFields(a.out, outputField{"result", "released"}, outputField{"sandbox", response.SandboxName})
 		}
 		return 130
 	}
@@ -194,20 +189,19 @@ func (a *app) runTerminalAcquireWithMode(options acquireOptions, autoRelease boo
 		_ = printJSON(a.out, raw)
 		return 0
 	}
-	devices := "无"
-	if len(response.Devices) > 0 {
-		devices = strings.Join(response.Devices, ",")
+	memory := "0"
+	if options.memory != 0 {
+		memory = fmt.Sprintf("%dG", options.memory)
 	}
-	fmt.Fprintln(a.out, "[neubox] 沙盒已创建")
-	fmt.Fprintf(a.out, "    sandbox: %s\n", response.SandboxName)
-	fmt.Fprintf(a.out, "    pid: %d\n", shellPID)
-	fmt.Fprintf(a.out, "    devices: %s\n", devices)
-	if autoRelease {
-		fmt.Fprintln(a.out, "    Docker 会话结束后自动释放")
-	} else {
-		fmt.Fprintln(a.out, "    release: neubox release")
-		fmt.Fprintln(a.out, "    docker: neubox docker run -- <docker run 参数>")
-	}
+	printFields(a.out,
+		outputField{"result", "acquired"},
+		outputField{"sandbox", response.SandboxName},
+		outputField{"state", "ACTIVE"},
+		outputField{"pid", fmt.Sprint(shellPID)},
+		outputField{"devices", formatDevices(response.Devices)},
+		outputField{"cpu", formatCPU(options.cpu)},
+		outputField{"memory", formatMemory(memory)},
+	)
 	return 0
 }
 
@@ -233,12 +227,12 @@ func (a *app) cancelQueuedAcquire(acquireID string) int {
 		map[string]any{"host_pid": a.getPID()},
 	)
 	if err != nil {
-		fmt.Fprintf(a.errOut, "取消排队中的 acquire 失败: %v\n", err)
+		a.printError("acquire_cancel_failed", fmt.Sprintf("取消排队中的 acquire 失败: %v", err))
 		return 130
 	}
 	if err := api.ResponseError(status, raw); err != nil {
-		fmt.Fprintf(a.errOut, "取消排队中的 acquire 失败: HTTP %d %s\n",
-			status, strings.TrimSpace(string(raw)))
+		a.printError("acquire_cancel_failed", fmt.Sprintf("取消排队中的 acquire 失败: HTTP %d %s",
+			status, strings.TrimSpace(string(raw))))
 		return 130
 	}
 	var response struct {
@@ -246,7 +240,7 @@ func (a *app) cancelQueuedAcquire(acquireID string) int {
 		SandboxName string `json:"sandbox_name"`
 	}
 	if err := api.DecodeJSON(raw, &response); err != nil {
-		fmt.Fprintf(a.errOut, "取消排队中的 acquire 失败: 响应无法解析\n")
+		a.printError("acquire_cancel_failed", "取消排队中的 acquire 失败: 响应无法解析")
 		return 130
 	}
 	if a.jsonOutput {
@@ -254,9 +248,9 @@ func (a *app) cancelQueuedAcquire(acquireID string) int {
 		return 130
 	}
 	if response.Status == "released" {
-		fmt.Fprintf(a.out, "[neubox] 已经拿到卡，沙盒已释放: %s\n", response.SandboxName)
+		printFields(a.out, outputField{"result", "released"}, outputField{"sandbox", response.SandboxName})
 	} else {
-		fmt.Fprintln(a.out, "[neubox] 已取消排队中的 acquire")
+		printFields(a.out, outputField{"result", "cancelled"}, outputField{"kind", "acquire"})
 	}
 	return 130
 }

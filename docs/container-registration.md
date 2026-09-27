@@ -132,6 +132,11 @@ hook），`neubox docker start` 都照常把容器拉起来，只在命令行上
   `--restart=always`、daemon 重启后的 live-restore 都是如此。annotation 还指着
   活沙盒就照旧能用；沙盒已经没了就是零卡。
 
+`neubox docker restart` 面向正在运行的受管容器：先确认 annotation 与 Worker
+可用，再 `docker stop` 并等待旧 mount namespace 的登记撤销，随后存借条并
+`docker start`。若新借条未被认领，客户端会再次停止容器并报错。运行中容器
+不能靠 `docker exec` 更换设备授权。
+
 ## 为什么必须卡在 ENTRYPOINT 之前
 
 登记必须发生在容器 ENTRYPOINT 之前 —— 驱动在容器内第一次 NPU 初始化时建表并

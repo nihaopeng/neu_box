@@ -23,7 +23,7 @@ func TestWorkerErrorReturnsNonZero(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit=%d", code)
 	}
-	if !strings.Contains(errOut.String(), "HTTP 409") {
+	if !strings.Contains(errOut.String(), "http_status:") || !strings.Contains(errOut.String(), "409") {
 		t.Fatalf("unexpected stderr: %s", errOut.String())
 	}
 }
@@ -35,7 +35,10 @@ func TestHelpUsesReadableIndentation(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
 	for _, expected := range []string{
+		"\n    neubox shell",
 		"\n    neubox acquire",
+		"\n    neubox [--json] docker restart",
+		"\n    neubox [--json] docker status",
 		"\n    --device ID",
 		"\n    list ",
 		"\n    NEU_BOX_URL",

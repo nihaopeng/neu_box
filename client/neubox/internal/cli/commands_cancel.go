@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -74,11 +73,14 @@ func (a *app) runCancel(args []string) int {
 const cancelUsage = "用法: neubox cancel <id> [--kind task|acquire]"
 
 func (a *app) printCancelOutcome(kind, identifier, status, sandboxName string) {
-	fmt.Fprintln(a.out, "[neubox] 已取消")
-	fmt.Fprintf(a.out, "    id: %s\n", identifier)
-	fmt.Fprintf(a.out, "    kind: %s\n", kind)
-	fmt.Fprintf(a.out, "    status: %s\n", status)
-	if sandboxName != "" {
-		fmt.Fprintf(a.out, "    sandbox: %s（已释放）\n", sandboxName)
+	fields := []outputField{
+		{"result", "cancelled"},
+		{"id", identifier},
+		{"kind", kind},
+		{"state", status},
 	}
+	if sandboxName != "" {
+		fields = append(fields, outputField{"sandbox", sandboxName})
+	}
+	printFields(a.out, fields...)
 }

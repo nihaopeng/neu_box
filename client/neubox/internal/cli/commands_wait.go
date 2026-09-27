@@ -49,7 +49,10 @@ func (a *app) runWait(args []string) int {
 			return code
 		}
 		if response.Status != lastStatus {
-			fmt.Fprintf(a.errOut, "[neubox] task %s status: %s\n", options.taskID, response.Status)
+			printFields(a.errOut,
+				outputField{"task", options.taskID},
+				outputField{"state", response.Status},
+			)
 			lastStatus = response.Status
 		}
 
@@ -196,17 +199,20 @@ func (a *app) drainTaskLog(pathID string, offset int64) (int64, int) {
 }
 
 func (a *app) printWaitResult(response taskResultResponse) {
-	fmt.Fprintf(a.errOut, "[neubox] task %s finished: %s", response.TaskID, response.Status)
-	if response.Result != nil && response.Result.ReturnCode != nil {
-		fmt.Fprintf(a.errOut, " rc=%d", *response.Result.ReturnCode)
+	fields := []outputField{
+		{"task", response.TaskID},
+		{"state", response.Status},
 	}
-	fmt.Fprintln(a.errOut)
+	if response.Result != nil && response.Result.ReturnCode != nil {
+		fields = append(fields, outputField{"return_code", fmt.Sprint(*response.Result.ReturnCode)})
+	}
 	if response.Result != nil {
 		if response.Result.TimedOut {
-			fmt.Fprintln(a.errOut, "    timed_out: true")
+			fields = append(fields, outputField{"timed_out", "true"})
 		}
 		if response.Result.Error != nil {
-			fmt.Fprintf(a.errOut, "    error: %v\n", response.Result.Error)
+			fields = append(fields, outputField{"error", fmt.Sprint(response.Result.Error)})
 		}
 	}
+	printFields(a.errOut, fields...)
 }

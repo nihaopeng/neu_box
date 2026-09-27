@@ -50,8 +50,7 @@ func (a *app) runRelease(args []string) int {
 		_ = printJSON(a.out, raw)
 		return 0
 	}
-	fmt.Fprintln(a.out, "[neubox] 沙盒已释放")
-	fmt.Fprintf(a.out, "    sandbox: %s\n", sandboxName)
+	printFields(a.out, outputField{"result", "released"}, outputField{"sandbox", sandboxName})
 	return 0
 }
 
@@ -88,33 +87,20 @@ func (a *app) runList(args []string) int {
 		_ = printJSON(a.out, raw)
 		return 0
 	}
-	fmt.Fprintln(a.out, "[neubox] 沙盒列表")
+	printFields(a.out, outputField{"count", strconv.Itoa(len(response.Sandboxes))})
 	if len(response.Sandboxes) == 0 {
-		fmt.Fprintln(a.out, "    (无)")
 		return 0
 	}
 	for _, sandbox := range response.Sandboxes {
-		owner := sandbox.Owner
-		if owner == "" {
-			owner = "?"
-		}
-		devices := "—"
-		if len(sandbox.Devices) > 0 {
-			devices = strings.Join(sandbox.Devices, ",")
-		}
-		resources := make([]string, 0, 2)
-		if sandbox.CPU != 0 {
-			resources = append(resources, fmt.Sprintf("CPU=%d", sandbox.CPU))
-		}
-		if sandbox.Mem != "" && sandbox.Mem != "0" {
-			resources = append(resources, "mem="+sandbox.Mem)
-		}
-		resourceText := "资源不限"
-		if len(resources) > 0 {
-			resourceText = strings.Join(resources, " ")
-		}
-		fmt.Fprintf(a.out, "    %s\n", sandbox.Name)
-		fmt.Fprintf(a.out, "        用户: %s  |  设备: %s  |  %s\n", owner, devices, resourceText)
+		fmt.Fprintln(a.out)
+		printFields(a.out,
+			outputField{"sandbox", sandbox.Name},
+			outputField{"state", sandbox.State},
+			outputField{"owner", sandbox.Owner},
+			outputField{"devices", formatDevices(sandbox.Devices)},
+			outputField{"cpu", formatCPU(sandbox.CPU)},
+			outputField{"memory", formatMemory(sandbox.Mem)},
+		)
 	}
 	return 0
 }
@@ -130,6 +116,7 @@ func (a *app) runStatus(args []string) int {
 	}
 	sandboxName := sandboxNameFromCgroup(raw)
 	var details *sandboxRecord
+	var detailsError string
 	if sandboxName != "" {
 		query := url.Values{"pid": []string{strconv.Itoa(shellPID)}}
 		// Local cgroup status remains useful while the Worker is unavailable.
@@ -139,49 +126,69 @@ func (a *app) runStatus(args []string) int {
 		httpClient.Timeout = 2 * time.Second
 		worker.HTTP = &httpClient
 		status, body, err := worker.Request(http.MethodGet, "/sandbox/status", query, nil)
-		if err == nil && status >= 200 && status < 300 {
+		if err != nil {
+			detailsError = err.Error()
+		} else if status < 200 || status >= 300 {
+			detailsError = fmt.Sprintf("Worker 返回 HTTP %d", status)
+		} else {
 			var response struct {
 				SandboxName string         `json:"sandbox_name"`
 				Sandbox     *sandboxRecord `json:"sandbox"`
 			}
-			if api.DecodeJSON(body, &response) == nil && response.SandboxName == sandboxName {
+			if err := api.DecodeJSON(body, &response); err != nil {
+				detailsError = err.Error()
+			} else if response.SandboxName == sandboxName && response.Sandbox != nil {
 				details = response.Sandbox
+			} else {
+				detailsError = "Worker 未返回这个沙盒的资源记录"
 			}
 		}
 	}
-	return a.printShellStatus(shellPID, sandboxName, details)
+	return a.printShellStatus(shellPID, sandboxName, details, detailsError)
 }
 
-func (a *app) printShellStatus(shellPID int, sandboxName string, details *sandboxRecord) int {
+func (a *app) printShellStatus(shellPID int, sandboxName string, details *sandboxRecord, detailsError string) int {
 	if a.jsonOutput {
 		var sandboxValue any
 		if sandboxName != "" {
 			sandboxValue = sandboxName
 		}
 		payload := map[string]any{
-			"pid":     shellPID,
-			"sandbox": sandboxValue,
+			"pid": shellPID, "sandbox": sandboxValue,
+			"details_available": details != nil,
 		}
 		if details != nil {
 			payload["devices"] = details.Devices
 			payload["state"] = details.State
+			payload["cpu"] = details.CPU
+			payload["memory"] = details.Mem
+		} else if detailsError != "" {
+			payload["details_error"] = detailsError
 		}
 		_ = printJSONValue(a.out, payload)
 		return 0
 	}
-	fmt.Fprintln(a.out, "[neubox] Shell 状态")
-	fmt.Fprintf(a.out, "    pid: %d\n", shellPID)
 	if sandboxName == "" {
-		fmt.Fprintln(a.out, "    sandbox: none")
-	} else {
-		fmt.Fprintf(a.out, "    sandbox: %s\n", sandboxName)
-		if details != nil {
-			fmt.Fprintf(a.out, "    devices: %s\n", strings.Join(details.Devices, ","))
-			if details.State != "" {
-				fmt.Fprintf(a.out, "    state: %s\n", details.State)
-			}
-		}
-		fmt.Fprintln(a.out, "    release: neubox release")
+		printFields(a.out, outputField{"sandbox", "none"}, outputField{"pid", strconv.Itoa(shellPID)})
+		return 0
+	}
+	state, devices, cpu, memory := "unknown", "unknown", "unknown", "unknown"
+	if details != nil {
+		state = details.State
+		devices = formatDevices(details.Devices)
+		cpu = formatCPU(details.CPU)
+		memory = formatMemory(details.Mem)
+	}
+	printFields(a.out,
+		outputField{"sandbox", sandboxName},
+		outputField{"state", state},
+		outputField{"pid", strconv.Itoa(shellPID)},
+		outputField{"devices", devices},
+		outputField{"cpu", cpu},
+		outputField{"memory", memory},
+	)
+	if detailsError != "" {
+		a.printWarning("sandbox_details_unavailable", detailsError)
 	}
 	return 0
 }
@@ -228,8 +235,10 @@ func (a *app) runJoin(args []string) int {
 		_ = printJSON(a.out, raw)
 		return 0
 	}
-	fmt.Fprintln(a.out, "[neubox] 已加入沙盒")
-	fmt.Fprintf(a.out, "    sandbox: %s\n", sandboxName)
-	fmt.Fprintf(a.out, "    pid: %d\n", shellPID)
+	printFields(a.out,
+		outputField{"result", "joined"},
+		outputField{"sandbox", sandboxName},
+		outputField{"pid", strconv.Itoa(shellPID)},
+	)
 	return 0
 }

@@ -67,9 +67,12 @@ func TestHostStatusReadsProcWithoutExternalCommands(t *testing.T) {
 	if !strings.Contains(out.String(), "sandbox: "+sandboxName) {
 		t.Fatalf("unexpected output: %s", out.String())
 	}
+	if !strings.Contains(out.String(), "unknown") || strings.Contains(out.String(), "devices: none") {
+		t.Fatalf("missing Worker details must be unknown: %s", out.String())
+	}
 }
 
-func TestHostStatusShowsAllocatedDevicesAndReleaseHint(t *testing.T) {
+func TestHostStatusShowsAllocatedResources(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/sandbox/status" || r.URL.Query().Get("pid") != "111" {
 			t.Errorf("unexpected status request: %s", r.URL.String())
@@ -90,8 +93,8 @@ func TestHostStatusShowsAllocatedDevicesAndReleaseHint(t *testing.T) {
 	if code := application.run([]string{"status"}); code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "devices: 235:0,235:1") ||
-		!strings.Contains(out.String(), "release: neubox release") {
+	if !strings.Contains(out.String(), "devices: 235:0, 235:1") ||
+		!strings.Contains(out.String(), "cpu:") || !strings.Contains(out.String(), "memory:") {
 		t.Fatalf("unexpected status output: %s", out.String())
 	}
 }

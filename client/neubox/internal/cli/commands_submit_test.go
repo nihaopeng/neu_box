@@ -52,7 +52,7 @@ func TestSubmitBuildsDockerTarget(t *testing.T) {
 	if received.Target.Workdir == nil || *received.Target.Workdir != "/workspace" {
 		t.Fatalf("unexpected workdir: %+v", received.Target.Workdir)
 	}
-	if !strings.Contains(out.String(), "ID=abc123") {
+	if !strings.Contains(out.String(), "task:") || !strings.Contains(out.String(), "abc123") {
 		t.Fatalf("unexpected output: %s", out.String())
 	}
 }

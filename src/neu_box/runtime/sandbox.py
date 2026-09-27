@@ -721,10 +721,9 @@ class SbxManager:
             existing = self.db.get_container(identity.mount_namespace)
             if existing is not None:
                 if existing.get('container_id') == identity.container_id:
-                    # 同一个容器在这个 mnt ns 上的重复登记（hook 在 exec 上也报到
-                    # 同一个 ns）：**以既有绑定为准**，不跟 annotation 走 ——
-                    # `neubox docker start` 按借条改绑之后，容器里再 exec 时
-                    # annotation 里还是建容器时那个沙盒名。
+                    # 同一个容器在这个 mnt ns 上的重复登记（例如 hook 重试）：
+                    # **以既有绑定为准**，不跟 annotation 走。exec 本身不触发
+                    # 登记；start 按借条改绑后，旧 annotation 仍留在配置里。
                     if existing.get('sandbox_name') != sandbox_name:
                         logger.warning(
                             "容器 %s（mnt ns %s）已绑在沙盒 '%s'，"

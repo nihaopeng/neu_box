@@ -326,8 +326,8 @@ def test_register_runtime_container_rejects_namespace_of_another_container():
 def test_register_runtime_container_keeps_an_existing_binding():
     """同一个容器重复登记：以既有绑定为准，不跟着这次报上来的沙盒改。
 
-    `docker exec` 会带着建容器时那行 annotation 再登记一次，而按借条改绑过的
-    容器早就绑在别的沙盒上了 —— 那一刻不能把授权搬走。
+    hook 重试可能带着建容器时那行 annotation 再登记一次，而按借条改绑过的
+    容器可能已经绑定别的沙盒；重复登记不能搬走授权。
     """
     other = 'sbx_other_task-9.slice'
     manager = _manager(

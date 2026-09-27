@@ -8,15 +8,17 @@ Neu Box 的终端沙盒隔离 / 命令任务提交客户端。Go 单文件静态
 ## 命令
 
 ```
+neubox shell [资源选项...]         新开宿主机子 shell，退出自动释放沙盒
 neubox acquire [选项...]       为当前终端同步申请沙盒
 neubox submit [选项...] -- CMD 异步提交命令任务
 neubox release [sandbox_name]  不传名称时释放当前 shell 的沙盒
 neubox cancel <id> [--kind task|acquire]
                                取消排队中/运行中的条目（acquire 已拿到卡则就地释放）
 neubox docker run DOCKER_ARGS 透传 docker run，自动补沙盒 annotation
-neubox docker shell [资源选项] -- DOCKER_ARGS
-                               临时申请设备、启动前台容器、退出后释放
 neubox docker start 容器 [参数] 借条式改绑：把当前 shell 的沙盒借给停着的容器
+neubox docker restart 容器    停止运行中容器并借当前 shell 沙盒重新启动
+neubox docker status 容器     查询 Docker 状态与 Worker 当前授权
+neubox docker exec 容器       报错并提示使用原生 docker exec
 neubox {list|status|join}      沙盒管理
 neubox tasks [--all | --since 4h]
                                任务队列（默认：活跃任务 + 近 2h 结束的）
@@ -24,9 +26,10 @@ neubox {result|log} TASK_ID    结果快照 / 完整日志
 neubox wait TASK_ID            增量跟踪日志并等待任务结束
 neubox check                   检查 worker 可达性与 API 版本兼容性
 neubox [--json] version
+neubox help [docker]           查看命令用法与容器生命周期说明
 ```
 
-资源选项可用于 `acquire` 和 `submit`：
+资源选项可用于 `shell`、`acquire` 和 `submit`：
 
 | 选项 | 说明 |
 |---|---|
@@ -43,7 +46,12 @@ neubox [--json] version
 | 选项 | 说明 |
 |---|---|
 | `--pid 12345` | 指定 PID（默认当前 shell 的父进程） |
-| （无容器选项） | acquire 只接受宿主机 PID；交互容器可用 `neubox docker shell` |
+| （无容器选项） | acquire 只接受宿主机 PID；申请后可用 `neubox docker run` 启动容器 |
+
+`neubox shell --device-num 2` 把 `neubox` 进程和新开的交互子 shell 放进沙盒，
+原来的宿主机 shell 不变。退出子 shell 后自动释放沙盒；长期持有或需要把当前
+shell 加入沙盒时继续使用 `acquire` / `release`。`shell` 不接受 `--pid`，
+默认启动 `$SHELL -i`，未设置 `$SHELL` 时使用 `/bin/sh -i`。
 
 命令任务统一使用 `submit`，其专属选项为：
 
@@ -60,7 +68,9 @@ neubox [--json] version
 | `--output HOST[:CONTAINER]` | Docker：创建并挂载可写输出目录；容器内默认 `/outputs` |
 | `--command "..."` | 命令字符串；也可把命令及参数放在 `--` 后 |
 
-默认输出为适合终端阅读的摘要，不混入 Worker 原始 JSON。自动化调用可将
+默认输出为顶格、标签对齐的两列 `key: value`，没有标题或 `next` 提示；
+CPU / 内存无限制显示为 `unlimited`，没有设备显示为 `none`，查询失败则显示
+`unknown`，不能把未知当成无卡。自动化调用可将
 `--json` 放在子命令前或紧跟子命令；成功结果写入 stdout，失败对象写入
 stderr。
 
@@ -94,18 +104,8 @@ docker run --annotation sandbox_cgroup=<沙盒名> --rm -it ubuntu bash
 `neu-box-runtime` 随同一个 `neuboxd` RPM 安装；用户需用 `neu-box-config init`
 设置真正的 runc，再手动设置 Docker 的 `default-runtime`。
 
-`docker run` 以外的 docker 子命令（build / ps / compose / …）不支持，同样直接
+`run` / `start` / `restart` / `status` 以外的 docker 子命令（build / ps / compose / …）不支持，同样直接
 写原生 docker，或者继续用 Worker 的 `submit --image`。
-
-一次性容器终端可以一步启动：
-
-```bash
-neubox docker shell --device-num 2 -- ubuntu bash
-```
-
-这条命令只把 `neubox` 进程放入临时沙盒，保持原宿主 shell 不变；Docker 前台容器
-退出后自动释放设备，并删除这次容器。需要长期保留容器时，继续使用上面的
-`acquire` → `neubox docker run` 流程。
 
 `docker start` 面向**已经停着**的容器：annotation 在建容器时就写死了、改不了，
 所以 start 走"借条"模型 —— 启动前把当前 shell 所在沙盒借给这个容器
@@ -114,6 +114,20 @@ create/启动 hook 认领借条完成改绑；客户端随后回查借条状态�
 /container/intent`），没认领就明确警告"容器起来了，但里面看不到设备"。跨
 shell 换沙盒继续用同一个容器要走 `neubox docker start`；直接敲原生
 `docker start` 没有借条，容器起得来但零卡。
+
+`neubox docker status CONTAINER` 把 Docker 的运行状态和 Worker 的当前登记合并显示。
+已停止容器没有当前授权；运行中但未登记的容器也没有 NeuBox 授权。
+Worker 查询失败显示 `unknown`。设备列表是授权记录，不代表驱动健康状况。
+
+运行中的受管容器要换卡，先在持有目标沙盒的 shell 中执行
+`neubox docker restart CONTAINER`。它先检查容器创建时的 annotation 和 Worker
+可达性，然后 `docker stop`，等旧登记撤销，再存借条并 `docker start`，最后确认
+借条被认领。重启会中断容器里的工作；没有 annotation 的普通容器无法靠重启
+获得设备，需用 `neubox docker run` 新建。已停止容器使用 `neubox docker start`。
+
+运行中的容器执行新命令，直接用 `docker exec -it CONTAINER bash`。这不会改变
+容器的设备授权。`neubox docker exec` 只报错并指向原生命令和
+`neubox docker status`，不会转发 Docker 参数。
 
 ## 任务日志
 
@@ -200,6 +214,9 @@ neubox acquire --device-num 2
 # 退出前释放
 neubox release
 
+# 临时宿主机终端，退出自动释放
+neubox shell --device-num 2
+
 # 提交高优先级任务（4 卡）
 neubox submit --device-num 4 --priority 1 -- python train.py
 
@@ -211,4 +228,9 @@ neubox result --json <task_id>
 
 # 容器任务
 neubox submit --image ubuntu -- bash
+
+# 运行中的受管容器：查看授权，进入容器，或换卡后重启
+neubox docker status my-container
+docker exec -it my-container bash
+neubox docker restart my-container
 ```

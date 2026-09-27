@@ -110,17 +110,26 @@ func (a *app) run(args []string) int {
 
 	switch args[0] {
 	case "help", "-h", "--help":
+		if len(args) == 2 && args[1] == "docker" {
+			a.printDockerHelp()
+			return 0
+		}
+		if len(args) != 1 {
+			return a.usageError("用法: neubox help [docker]")
+		}
 		a.printHelp()
 		return 0
 	case "version", "-v", "--version":
 		if a.jsonOutput {
 			_ = printJSONValue(a.out, map[string]any{"version": version})
 		} else {
-			fmt.Fprintln(a.out, version)
+			printFields(a.out, outputField{"version", version})
 		}
 		return 0
 	case "acquire", "a":
 		return a.runAcquire(args[1:])
+	case "shell":
+		return a.runShell(args[1:])
 	case "submit", "sub":
 		return a.runSubmit(args[1:])
 	case "release", "r":
@@ -147,7 +156,8 @@ func (a *app) run(args []string) int {
 		if a.jsonOutput {
 			a.printError("unknown_command", "未知命令: "+args[0])
 		} else {
-			fmt.Fprintf(a.errOut, "[neubox] 参数错误: 未知命令: %s\n\n", args[0])
+			printFields(a.errOut, outputField{"error", "未知命令: " + args[0]}, outputField{"hint", "neubox help"})
+			fmt.Fprintln(a.errOut)
 			a.printHelpTo(a.errOut)
 		}
 		return 2

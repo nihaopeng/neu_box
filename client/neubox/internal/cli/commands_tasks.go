@@ -84,12 +84,14 @@ func (a *app) runTasks(args []string) int {
 		}
 		return 0
 	}
-	fmt.Fprintln(a.out, "[neubox] 任务列表")
-	fmt.Fprintf(a.out, "    total: %d\n", len(visible))
-	fmt.Fprintf(a.out, "    pending: %d\n", response.TotalPending)
-	if hidden > 0 {
-		fmt.Fprintf(a.out, "    已省略 %d 个更早结束的任务（--all 查看全部）\n", hidden)
+	fields := []outputField{
+		{"count", fmt.Sprint(len(visible))},
+		{"pending", fmt.Sprint(response.TotalPending)},
 	}
+	if hidden > 0 {
+		fields = append(fields, outputField{"hidden", fmt.Sprint(hidden)})
+	}
+	printFields(a.out, fields...)
 	tasks := make([]taskResultResponse, 0, len(visible))
 	for _, entry := range visible {
 		var task taskResultResponse
@@ -99,32 +101,32 @@ func (a *app) runTasks(args []string) int {
 		tasks = append(tasks, task)
 	}
 	if len(tasks) == 0 {
-		fmt.Fprintln(a.out, "    (无)")
 		return 0
 	}
 	for _, task := range tasks {
 		fmt.Fprintln(a.out)
-		fmt.Fprintf(a.out, "    %s\n", entryID(task))
-		fmt.Fprintf(a.out, "        kind: %s\n", entryKind(task))
-		fmt.Fprintf(a.out, "        status: %s\n", task.Status)
-		fmt.Fprintf(a.out, "        user: %s\n", task.UserID)
+		item := []outputField{
+			{"id", entryID(task)},
+			{"kind", entryKind(task)},
+			{"state", task.Status},
+			{"user", task.UserID},
+		}
 		if entryKind(task) == "acquire" {
 			// acquire 是会话不是命令任务：没有 command / 日志 / 退出码。
 			if task.PID != 0 {
-				fmt.Fprintf(a.out, "        pid: %d\n", task.PID)
+				item = append(item, outputField{"pid", fmt.Sprint(task.PID)})
 			}
 			if task.Sandbox != "" {
-				fmt.Fprintf(a.out, "        sandbox: %s\n", task.Sandbox)
+				item = append(item, outputField{"sandbox", task.Sandbox})
 			}
 		} else {
-			fmt.Fprintf(a.out, "        command: %s\n", task.Command)
+			item = append(item, outputField{"command", task.Command})
 		}
 		if task.Position > 0 {
-			fmt.Fprintf(a.out, "        position: #%d\n", task.Position)
+			item = append(item, outputField{"position", fmt.Sprintf("#%d", task.Position)})
 		}
-		if resources := taskResourceText(task); resources != "" {
-			fmt.Fprintf(a.out, "        resources: %s\n", resources)
-		}
+		item = append(item, taskResourceFields(task)...)
+		printFields(a.out, item...)
 	}
 	return 0
 }
@@ -253,67 +255,52 @@ func (a *app) runResult(args []string) int {
 		return 0
 	}
 
-	fmt.Fprintln(a.out, "[neubox] 任务日志")
-	if len(logRaw) > 0 {
-		fmt.Fprintln(a.out, strings.TrimRight(string(logRaw), "\r\n"))
-	} else {
-		fmt.Fprintln(a.out, "    (暂无日志)")
+	fields := []outputField{
+		{"task", response.TaskID},
+		{"state", response.Status},
 	}
-
-	icons := map[string]string{
-		"completed": "✓",
-		"failed":    "✗",
-		"running":   "▶",
-		"queued":    "○",
-	}
-	icon := icons[response.Status]
-	if icon == "" {
-		icon = "?"
-	}
-	fmt.Fprintln(a.out)
-	fmt.Fprintln(a.out, "[neubox] 任务结果")
-	fmt.Fprintf(a.out, "    ID=%s\n", response.TaskID)
-	fmt.Fprintf(a.out, "    status: [%s %s]\n", icon, response.Status)
 	if response.Result != nil && response.Result.ReturnCode != nil {
-		fmt.Fprintf(a.out, "    rc=%d\n", *response.Result.ReturnCode)
+		fields = append(fields, outputField{"return_code", fmt.Sprint(*response.Result.ReturnCode)})
 		if response.Result.TimedOut {
-			fmt.Fprintln(a.out, "    timed_out: true")
+			fields = append(fields, outputField{"timed_out", "true"})
 		}
 		if response.Result.Error != nil {
-			fmt.Fprintf(a.out, "    error: %v\n", response.Result.Error)
+			fields = append(fields, outputField{"error", fmt.Sprint(response.Result.Error)})
 		}
 	}
-	fmt.Fprintf(a.out, "    user: %s\n", response.UserID)
-	fmt.Fprintf(a.out, "    command: %s\n", response.Command)
-	resources := taskResourceText(response)
-	if resources != "" {
-		fmt.Fprintf(a.out, "    resources: %s\n", resources)
-	}
+	fields = append(fields,
+		outputField{"user", response.UserID},
+		outputField{"command", response.Command},
+	)
+	fields = append(fields, taskResourceFields(response)...)
 	timestamp := response.FinishedAt
 	if timestamp == nil {
 		timestamp = response.CreatedAt
 	}
 	if timestamp != nil {
 		formatted := time.Unix(int64(*timestamp), 0).Local().Format("01-02 15:04")
-		fmt.Fprintf(a.out, "    time: %s\n", formatted)
+		fields = append(fields, outputField{"time", formatted})
+	}
+	printFields(a.out, fields...)
+	if len(logRaw) > 0 {
+		fmt.Fprintln(a.out)
+		fmt.Fprintln(a.out, "log:")
+		fmt.Fprintln(a.out, strings.TrimRight(string(logRaw), "\r\n"))
 	}
 	return 0
 }
 
-func taskResourceText(task taskResultResponse) string {
-	resources := make([]string, 0, 3)
-	if task.CPU != 0 {
-		resources = append(resources, fmt.Sprintf("CPU=%d", task.CPU))
+func taskResourceFields(task taskResultResponse) []outputField {
+	if task.CPU == 0 && (task.Mem == "" || task.Mem == "0") && task.DeviceNum == 0 && len(task.Devices) == 0 {
+		return nil
 	}
-	if task.Mem != "" && task.Mem != "0" {
-		resources = append(resources, "mem="+task.Mem)
+	devices := formatDevices(task.Devices)
+	if len(task.Devices) == 0 && task.DeviceNum > 0 {
+		devices = fmt.Sprintf("requested %d", task.DeviceNum)
 	}
-	if task.DeviceNum != 0 {
-		devices := fmt.Sprintf("设备=%d", task.DeviceNum)
-		if len(task.Devices) > 0 {
-			devices += " (" + strings.Join(task.Devices, ",") + ")"
-		}
-		resources = append(resources, devices)
+	return []outputField{
+		{"devices", devices},
+		{"cpu", formatCPU(task.CPU)},
+		{"memory", formatMemory(task.Mem)},
 	}
-	return strings.Join(resources, "  ")
 }

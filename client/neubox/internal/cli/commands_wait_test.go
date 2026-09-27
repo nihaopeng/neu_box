@@ -55,7 +55,7 @@ func TestWaitStreamsNewLogSegmentsUntilCompleted(t *testing.T) {
 	if !reflect.DeepEqual(logOffsets, []string{"0", "4"}) {
 		t.Fatalf("unexpected offsets: %#v", logOffsets)
 	}
-	for _, expected := range []string{"status: running", "status: completed", "finished: completed rc=0"} {
+	for _, expected := range []string{"state: running", "state: completed", "return_code:"} {
 		if !strings.Contains(errOut.String(), expected) {
 			t.Fatalf("missing %q in %s", expected, errOut.String())
 		}
@@ -87,7 +87,7 @@ func TestWaitReturnsFailureForFailedTask(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	if out.String() != "boom\n" || !strings.Contains(errOut.String(), "finished: failed rc=2") {
+	if out.String() != "boom\n" || !strings.Contains(errOut.String(), "state: failed") || !strings.Contains(errOut.String(), "return_code:") {
 		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
 	}
 }
@@ -109,7 +109,7 @@ func TestWaitReportsCancelledTask(t *testing.T) {
 	if code := application.run([]string{"wait", "cancel1"}); code != 130 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "finished: cancelled") {
+	if !strings.Contains(errOut.String(), "state: cancelled") {
 		t.Fatalf("unexpected stderr: %s", errOut.String())
 	}
 }

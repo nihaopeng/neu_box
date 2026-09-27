@@ -128,7 +128,7 @@ func TestAcquireRejectsUnknownOptionBeforeHTTP(t *testing.T) {
 	}
 }
 
-func TestAcquirePrintsDockerHint(t *testing.T) {
+func TestAcquirePrintsAllocatedResources(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, writer, http.StatusCreated, map[string]any{
 			"sandbox_name": "sbx_yuxd_42.slice",
@@ -141,7 +141,9 @@ func TestAcquirePrintsDockerHint(t *testing.T) {
 	if code := application.run([]string{"acquire"}); code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "neubox docker run") {
-		t.Fatalf("acquire 输出应提示 docker run 用法: %s", out.String())
+	for _, want := range []string{"result:", "acquired", "sandbox:", "devices: 235:1", "cpu:", "unlimited", "memory:"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in %s", want, out.String())
+		}
 	}
 }

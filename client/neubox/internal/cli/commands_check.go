@@ -30,25 +30,41 @@ func (a *app) runCheck(args []string) int {
 		return a.requestError(err)
 	}
 	if status != http.StatusOK {
-		fmt.Fprintf(a.errOut, "worker /healthz 返回 HTTP %d\n", status)
+		a.printError("worker_health_failed", fmt.Sprintf("worker /healthz 返回 HTTP %d", status))
 		return 1
 	}
 	var health healthResponse
 	if err := api.DecodeJSON(raw, &health); err != nil {
-		fmt.Fprintf(a.errOut, "解析 /healthz 失败: %v\n", err)
-		return 1
+		return a.internalError("worker_health_invalid", fmt.Errorf("解析 /healthz 失败: %w", err))
 	}
-	fmt.Fprintf(a.out, "[neubox] %s %s (schema %v)\n", health.Role, health.Version, health.SchemaVer)
+	apiVersion := "unknown"
+	compatible := false
+	if health.APIVersion != nil {
+		apiVersion = fmt.Sprint(*health.APIVersion)
+		compatible = *health.APIVersion >= requiredAPIVersion
+	}
+	if a.jsonOutput {
+		_ = printJSONValue(a.out, map[string]any{
+			"worker": health.Role, "version": health.Version,
+			"schema": health.SchemaVer, "api_version": health.APIVersion,
+			"compatible": compatible,
+		})
+	} else {
+		printFields(a.out,
+			outputField{"worker", health.Role},
+			outputField{"version", health.Version},
+			outputField{"schema", fmt.Sprint(health.SchemaVer)},
+			outputField{"api_version", apiVersion},
+			outputField{"compatible", fmt.Sprint(compatible)},
+		)
+	}
 	if health.APIVersion == nil {
-		fmt.Fprintln(a.out, "  api_version: 未上报（旧版 worker）")
-		fmt.Fprintln(a.errOut, "error: worker 未上报 api_version，不支持 /tasks；请升级 worker")
+		a.printError("api_version_missing", "worker 未上报 api_version，不支持 /tasks；请升级 worker")
 		return 1
 	}
-	fmt.Fprintf(a.out, "  api_version: %d (客户端要求 >= %d)\n", *health.APIVersion, requiredAPIVersion)
 	if *health.APIVersion < requiredAPIVersion {
-		fmt.Fprintln(a.errOut, "error: worker API 版本过低，请升级 worker 或降级客户端")
+		a.printError("api_version_too_old", "worker API 版本过低，请升级 worker 或降级客户端")
 		return 1
 	}
-	fmt.Fprintln(a.out, "  ✓ 兼容")
 	return 0
 }

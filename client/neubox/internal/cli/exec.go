@@ -24,14 +24,14 @@ type ExecFn func(path string, argv []string, env []string) error
 // LookPathFn 解析可执行文件路径；注入是为了让测试不依赖 PATH 上装没装 docker。
 type LookPathFn func(file string) (string, error)
 
-// OutputFn 跑一条命令并拿回它的 stdout（`neubox docker start` 用来查容器 ID）。
+// OutputFn 跑一条命令并拿回它的 stdout（查询容器及安静执行 restart 的 stop/start）。
 // stderr 直接透给用户，docker 自己的报错不该被我们吞掉。
 type OutputFn func(path string, args ...string) ([]byte, error)
 
 // RunFn 起一条子进程，把它接到当前进程的 0/1/2 号 fd 上，返回退出码。
 //
-// `docker run` 用 ExecFn 把自己换成 docker；`docker start` 不行 —— start 之后
-// 还要回查借条有没有被认领，进程不能被替换掉。
+// `docker run` 用 ExecFn 把自己换成 docker；`docker start` 和交互式 shell
+// 需要子进程，前者要回查借条，后者要在退出时释放沙盒。
 type RunFn func(path string, argv []string, env []string) (int, error)
 
 func defaultExec(path string, argv []string, env []string) error {

@@ -34,7 +34,7 @@ func TestCancelSendsUnifiedEntryRequest(t *testing.T) {
 	if pid, ok := body["host_pid"].(float64); !ok || int(pid) != 222 {
 		t.Fatalf("host_pid 应为调用方自己的 PID 222，实际 %v", body["host_pid"])
 	}
-	if !strings.Contains(out.String(), "已取消") ||
+	if !strings.Contains(out.String(), "cancelled") ||
 		!strings.Contains(out.String(), "sbx_yuxd_1.slice") {
 		t.Fatalf("输出: %s", out.String())
 	}

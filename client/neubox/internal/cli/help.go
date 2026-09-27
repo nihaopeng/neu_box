@@ -13,13 +13,15 @@ func (a *app) printHelpTo(writer io.Writer) {
 	fmt.Fprint(writer, `neubox — 终端沙盒隔离 / 命令任务提交
 
 用法:
+    neubox shell [资源选项...]
     neubox [--json] acquire [选项...]
     neubox [--json] submit [选项...] -- <command> [args...]
     neubox [--json] release [sandbox_name]
     neubox [--json] cancel <id> [--kind task|acquire]
     neubox [--json] docker run <docker 参数...>
-    neubox docker shell [资源选项] -- [docker run 参数] IMAGE [CMD]
     neubox [--json] docker start <容器> [docker 参数...]
+    neubox [--json] docker restart <容器>
+    neubox [--json] docker status <容器>
     neubox [--json] {list|status|check|join|result} [参数]
     neubox [--json] tasks [--all] [--since 4h]
     neubox wait <task_id> [--interval 2s] [--timeout 0]
@@ -28,7 +30,7 @@ func (a *app) printHelpTo(writer io.Writer) {
     --json                 只输出机器可读 JSON；失败信息写入 stderr
 
 输出说明:
-    默认模式               输出终端可读的结果摘要，不混入 Worker 原始 JSON
+    默认模式               顶格两列 key: value，字段冒号对齐；无标题和操作提示
     JSON 模式              --json 可放在子命令前或紧跟子命令
                            成功结果写入 stdout，失败对象写入 stderr
     result --json          在任务元数据中增加 log 字段
@@ -36,6 +38,7 @@ func (a *app) printHelpTo(writer io.Writer) {
     submit ... -- ...      -- 后面的参数属于目标命令，不再解析为 neubox 选项
 
 命令说明:
+    shell                  为子 shell 申请沙盒；退出自动释放，当前 shell 不变
     acquire                同步申请终端沙盒；返回成功时当前 shell 已进入沙盒
     submit                 异步提交命令任务；返回成功只表示任务已进入队列，
                            可用 --wait 直接跟踪，或事后使用 wait <task_id>
@@ -43,19 +46,20 @@ func (a *app) printHelpTo(writer io.Writer) {
     result <task_id>        查询异步任务的当前状态、执行结果和完整日志
     docker run              透传 docker run，自动补上沙盒 annotation；
                            没有自己的选项，参数一个不改地交给 docker
-    docker shell            为前台 Docker 会话自动申请、释放沙盒；
-                           自动添加 --rm -it，不搬动当前宿主 shell
     docker start            把停着的容器拉起来，并把当前 shell 的沙盒借给它
                            （容器名放最前面，docker 的选项跟在后面）
+    docker restart          停止运行中的受管容器，再借当前 shell 的沙盒启动
+    docker status           查询容器运行状态和当前授权设备
+    docker exec             不支持借卡；请使用原生 docker exec，先查 docker status
 
-acquire 选项:
+shell / acquire 资源选项:
     --device ID            指定一个卡号，可重复
     --devices 1,3          指定卡号，逗号分隔
     --device-num 2         自动分配卡数量；不指定任何设备选项时默认 1；
                            与 --device/--devices 互斥
     --cpu 4                CPU 核数，0 表示不限
     --mem 8                内存 GB，0 表示不限
-    --pid 12345            指定 PID；默认使用启动客户端的当前 shell
+    --pid 12345            仅 acquire：指定 PID；默认当前 shell
     --pid 只能指定宿主 PID；容器内申请会被拒绝
 
 submit 选项:
@@ -90,6 +94,7 @@ submit 选项:
     version                      显示客户端版本
 
 示例:
+    neubox shell --device-num 2
     neubox acquire --device-num 1
     neubox acquire --devices 1,3 --cpu 4 --mem 8
     neubox submit --device 1 -- npu-smi info
@@ -103,8 +108,10 @@ submit 选项:
     neubox cancel 7c65d5ac21f4            # 取消排队中/运行中的任务
     neubox cancel 9f0a1b2c3d4e --kind acquire
     neubox docker run --rm -it ubuntu bash
-    neubox docker shell --device-num 2 -- ubuntu bash
     neubox docker start my-container
+    neubox docker status my-container
+    neubox docker restart my-container
+    docker exec -it my-container bash
 
 环境变量:
     NEU_BOX_URL            Worker 地址，默认 http://127.0.0.1:59075
@@ -119,6 +126,11 @@ docker start 拿卡靠的不是 annotation（那是建容器时写死的、改�
 先存的一张借条：把当前 shell 所在沙盒借给这个容器，10 秒内有效、一次性。所以
 跨 shell 换沙盒继续用同一个容器要走 neubox docker start；直接敲原生
 docker start 没有借条，容器起得来但零卡。
+
+运行中的容器不能靠 docker exec 改变授权设备；要换卡，先进入目标沙盒，再使用
+neubox docker restart。restart 会中断容器工作，只支持创建时已有 annotation 的
+受管容器；已停止的容器用 neubox docker start。neubox docker status 显示的是
+Worker 当前授权记录，不是驱动健康检测。更多细节见 neubox docker help。
 
 submit 的 Host 目标从提交时的工作目录运行；只有 --env 显式选择的变量会从
 提交终端传入。Docker --project/--mount/--output 使用 Worker 节点上的宿主路径，

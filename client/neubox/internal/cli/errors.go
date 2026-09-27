@@ -27,7 +27,7 @@ func (a *app) printError(code, message string) {
 		})
 		return
 	}
-	fmt.Fprintf(a.errOut, "[neubox] %s\n", message)
+	printFields(a.errOut, outputField{"error", message}, outputField{"code", code})
 }
 
 func (a *app) printWarning(code, message string) {
@@ -38,5 +38,5 @@ func (a *app) printWarning(code, message string) {
 		})
 		return
 	}
-	fmt.Fprintf(a.errOut, "[neubox] 警告: %s\n", message)
+	printFields(a.errOut, outputField{"warning", message}, outputField{"code", code})
 }

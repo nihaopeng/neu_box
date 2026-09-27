@@ -178,7 +178,7 @@ func TestAcquireCancelsOnSIGINTWhileQueued(t *testing.T) {
 	if pid, ok := deletedBody["host_pid"].(float64); !ok || int(pid) != 222 {
 		t.Fatalf("取消请求要带上调用方 PID，实际 %v", deletedBody["host_pid"])
 	}
-	if !strings.Contains(out.String(), "取消") {
+	if !strings.Contains(out.String(), "cancelled") {
 		t.Fatalf("输出里没有取消提示: %s", out.String())
 	}
 }

@@ -23,7 +23,7 @@ func TestCheckCompatibleWorker(t *testing.T) {
 	if code := app.runCheck(nil); code != 0 {
 		t.Fatalf("runCheck code = %d, out=%q err=%q", code, out.String(), errOut.String())
 	}
-	if !strings.Contains(out.String(), "api_version: 2") || !strings.Contains(out.String(), "兼容") {
+	if !strings.Contains(out.String(), "api_version:") || !strings.Contains(out.String(), "compatible:") || !strings.Contains(out.String(), "true") {
 		t.Errorf("output missing compatibility line: %q", out.String())
 	}
 }

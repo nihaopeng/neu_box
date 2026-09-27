@@ -149,8 +149,8 @@ neubox check
 neubox acquire --device-num 2
 neubox release
 
-# 一条命令进入临时 Docker 终端，退出后自动释放
-neubox docker shell --device-num 2 -- ubuntu bash
+# 新开临时宿主机 shell；退出后自动释放
+neubox shell --device-num 2
 
 # 提交四卡任务并增量跟踪日志
 neubox submit --device-num 4 --priority 1 --wait -- python train.py
@@ -158,6 +158,10 @@ neubox submit --device-num 4 --priority 1 --wait -- python train.py
 # 项目和输出保留在宿主机
 neubox submit --image training:v1 --project --output ./runs/exp1 \
   --wait -- python train.py
+
+# 已有容器的授权状态；换卡需在目标沙盒里重启容器
+neubox docker status my-container
+neubox docker restart my-container
 ```
 
 完整参数见 [客户端说明](client/neubox/README.md)。

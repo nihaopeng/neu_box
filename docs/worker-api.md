@@ -24,8 +24,8 @@ Neu Box `0.5.0`。Worker 默认监听 `http://<worker-host>:59075`，所有接�
 | `POST` | `/sandbox/acquire` | 为现有进程排队申请终端沙盒 |
 | `GET` | `/sandbox/acquire/<acquire_id>` | 查询终端沙盒申请 |
 | `POST` | `/container/register` | 容器归属登记（由节点 OCI runtime hook 调用，非用户接口） |
-| `POST` | `/container/intent` | 登记 start 借条（由 `neubox docker start` 调用） |
-| `GET` | `/container/intent` | 查询借条有没有被认领（`neubox docker start` 用它确认） |
+| `POST` | `/container/intent` | 登记 start 借条（由 `neubox docker start/restart` 调用） |
+| `GET` | `/container/intent` | 查询借条有没有被认领（`neubox docker start/restart` 用它确认） |
 | `POST` | `/sandbox/release` | 销毁终端沙盒，释放设备 |
 | `POST` | `/sandbox/join` | 将 Host PID 加入已有沙盒 |
 | `GET` | `/sandbox/status` | 按 Host PID 或已登记容器查询沙盒 |
@@ -719,9 +719,9 @@ mount namespace 的 PID 一律拒绝，否则等于把整机登记成受托方�
 认领后即作废，回到规则 2。
 
 同一个 mount namespace 已经登记在**别的 container_id** 下时返回 `409`；如果是
-**同一个容器**重复登记（`docker exec` 会带着建容器时那行 annotation 再来一次），
+**同一个容器**重复登记（例如 hook 重试），
 以既有绑定为准、幂等返回，不跟着这次报上来的沙盒改 —— 否则按借条改绑过的容器
-一 exec 就把授权搬走了。成功返回 HTTP `201`：
+可能被旧 annotation 搬走授权。`docker exec` 不走归属登记 hook。成功返回 HTTP `201`：
 
 ```json
 {
@@ -762,7 +762,7 @@ hook 的处理分两类（见 `runtime/neubox/docs/runtime-hook.md`）：
   `runc create` 失败、容器不启动。这是 fail-closed：拿不到授权答案时绝不放行
   （维护窗口里 BPF 可能是拆掉的，放行等于把全部卡送出去）。
 
-### 登记 / 查询 start 借条（`neubox docker start` 专用）
+### 登记 / 查询 start 借条（`neubox docker start/restart`）
 
 ```http
 POST /container/intent
@@ -816,8 +816,9 @@ GET 返回同一形状，`state` 为 `pending`（还没被认领）、`consumed`
 ### 查询沙盒
 
 宿主进程可用 `GET /sandbox/status?pid=<host-pid>` 查询；容器内使用私有 PID
-namespace 时，应传已登记的 `GET /sandbox/status?container=<name-or-id>`，Worker
-按容器登记记录返回所属 sandbox。两种形式均返回：
+namespace 时，应传已登记的 `GET /sandbox/status?container=<container-id>`，Worker
+按容器登记记录返回所属 sandbox。CLI `neubox docker status <name-or-id>` 先用
+`docker inspect` 把名称解析成完整 ID。两种形式均返回：
 
 ```json
 {"sandbox_name": "sbx_yuxd_45678.slice", "sandbox": {...}}

@@ -43,7 +43,7 @@ func TestResultPrintsLogAndSummary(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	for _, expected := range []string{"hello", "[✓ completed]", "rc=0", "设备=1"} {
+	for _, expected := range []string{"hello", "state:", "completed", "return_code:", "devices:", "235:0", "cpu:", "memory:"} {
 		if !strings.Contains(out.String(), expected) {
 			t.Fatalf("missing %q in %s", expected, out.String())
 		}
@@ -114,7 +114,7 @@ func TestTasksDefaultHidesFinishedOutsideWindow(t *testing.T) {
 	if strings.Contains(text, "old-1") {
 		t.Fatalf("old-1 should be hidden by default:\n%s", text)
 	}
-	if !strings.Contains(text, "已省略 1 个更早结束的任务") {
+	if !strings.Contains(text, "hidden:") || !strings.Contains(text, "1") {
 		t.Fatalf("missing omitted hint:\n%s", text)
 	}
 }
@@ -130,7 +130,7 @@ func TestTasksAllShowsEveryEntry(t *testing.T) {
 			t.Fatalf("expected %s in --all output:\n%s", visible, text)
 		}
 	}
-	if strings.Contains(text, "已省略") {
+	if strings.Contains(text, "hidden:") {
 		t.Fatalf("--all must not report omitted entries:\n%s", text)
 	}
 }
