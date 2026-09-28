@@ -20,9 +20,13 @@ neubox docker start 容器 [参数] 启动停止容器并借当前沙盒；-a �
 neubox docker restart 容器    停止运行中容器并借当前 shell 沙盒重新启动
 neubox docker status 容器     查询 Docker 状态与 Worker 当前授权
 neubox docker exec 容器       报错并提示使用原生 docker exec
-neubox {list|status|join}      沙盒管理
-neubox tasks [--all | --since 4h]
-                               任务队列（默认：活跃任务 + 近 2h 结束的）
+neubox status                  当前终端的沙盒与资源
+neubox join SANDBOX            加入已有沙盒
+neubox list                    所有用户的活跃任务、申请和沙盒
+neubox list --history          加入近 2h 的结束记录
+neubox list --since 4h         自定义结束记录时间窗
+neubox list --sandboxes        只查看沙盒
+neubox tasks                   list 的别名
 neubox {result|log} TASK_ID    结果快照 / 完整日志
 neubox wait TASK_ID            增量跟踪日志并等待任务结束
 neubox check                   检查 worker 可达性与 API 版本兼容性
@@ -58,7 +62,7 @@ shell 加入沙盒时继续使用 `acquire` / `release`。`shell` 不接受 `--p
 
 | 选项 | 说明 |
 |---|---|
-| `--priority 1` | 队列优先级：0=普通，数值越大越先执行 |
+| `--priority 1` | 高优先级：0=普通，1=赶论文；不抢占已运行任务 |
 | `--image IMAGE` | 使用 Worker 创建并登记的一次性容器 |
 | `--wait` | 提交后直接跟踪日志和退出状态；中断跟踪不取消任务 |
 | `--workdir PATH` | 工作目录；Host 默认提交时所在目录 |
@@ -145,9 +149,10 @@ Worker 查询失败显示 `unknown`。设备列表是授权记录，不代表驱
 
 ## 任务日志
 
-`tasks` 默认只显示活跃任务（queued/running）和最近 2h 内结束的任务，避免每次
-调用都刷出 worker 保留的全部历史记录；`--all` 显示 worker 返回的全部条目，
-`--since 4h` 可自定义时间窗（如 `30m` / `12h`）。
+`list` 默认显示所有用户的活跃任务、申请和沙盒；`tasks` 是同义命令。
+排队条目的 `position` 同时给出优先级和该优先级内的排位。
+`--history` 加入近 2h 的结束记录，`--since 4h` 可自定义时间窗，
+`--all` 显示 Worker 返回的全部最近记录，`--sandboxes` 只显示沙盒。
 
 `result` 返回调用时的状态与完整日志快照。长任务应使用：
 
@@ -269,8 +274,9 @@ neubox shell --device-num 2
 neubox submit --device-num 4 --priority 1 -- python train.py
 
 # 队列 / 结果
-neubox tasks
-neubox tasks --all           # 含较早结束的任务
+neubox list                  # 所有用户的活跃任务、申请和沙盒
+neubox list --history        # 加入近 2h 的结束记录
+neubox list --all            # 包含 Worker 返回的全部最近记录
 neubox wait <task_id>
 neubox result --json <task_id>
 

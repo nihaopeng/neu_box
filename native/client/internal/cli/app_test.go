@@ -52,7 +52,7 @@ func TestHelpUsesReadableIndentation(t *testing.T) {
 	if code := application.run([]string{"help", "verbose"}); code != 0 {
 		t.Fatalf("verbose exit=%d", code)
 	}
-	for _, expected := range []string{"--device ID", "NEU_BOX_URL", "neubox docker help verbose"} {
+	for _, expected := range []string{"priority 1", "NEU_BOX_URL", "neubox docker help verbose"} {
 		if !strings.Contains(out.String(), expected) {
 			t.Fatalf("详细帮助缺少 %q: %s", expected, out.String())
 		}

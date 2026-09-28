@@ -43,10 +43,11 @@ type commandRequest struct {
 }
 
 type commandResponse struct {
-	TaskID   string `json:"task_id"`
-	Position int    `json:"position"`
-	Priority int    `json:"priority"`
-	Error    string `json:"error"`
+	TaskID        string         `json:"task_id"`
+	Position      int            `json:"position"`
+	QueuePosition *queuePosition `json:"queue_position"`
+	Priority      int            `json:"priority"`
+	Error         string         `json:"error"`
 }
 
 func (a *app) runSubmit(args []string) int {
@@ -309,10 +310,9 @@ func (a *app) submitCommand(options submitOptions) int {
 	fields := []outputField{
 		{"result", "submitted"},
 		{"task", response.TaskID},
-		{"position", fmt.Sprintf("#%d", response.Position)},
 	}
-	if response.Priority > 0 {
-		fields = append(fields, outputField{"priority", fmt.Sprint(response.Priority)})
+	if response.QueuePosition != nil {
+		fields = append(fields, outputField{"position", formatQueuePosition(response.QueuePosition)})
 	}
 	deviceText := formatDevices(options.deviceIDs)
 	if len(options.deviceIDs) == 0 && options.deviceNum > 0 {

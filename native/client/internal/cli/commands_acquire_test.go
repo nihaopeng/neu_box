@@ -35,7 +35,10 @@ func TestAcquireWaitsForQueuedResult(t *testing.T) {
 			if _, ok := payload["container"]; ok {
 				t.Error("unexpected container")
 			}
-			writeJSON(t, w, 202, map[string]any{"acquire_id": "id1", "status": "queued"})
+			writeJSON(t, w, 202, map[string]any{
+				"acquire_id": "id1", "status": "queued",
+				"queue_position": map[string]int{"priority": 0, "rank": 2},
+			})
 			return
 		}
 		if r.URL.Path != "/sandbox/acquire/id1" {
@@ -43,7 +46,10 @@ func TestAcquireWaitsForQueuedResult(t *testing.T) {
 		}
 		polls++
 		if polls == 1 {
-			writeJSON(t, w, 202, map[string]any{"status": "queued"})
+			writeJSON(t, w, 202, map[string]any{
+				"status":         "queued",
+				"queue_position": map[string]int{"priority": 0, "rank": 1},
+			})
 			return
 		}
 		writeJSON(t, w, 201, map[string]any{"sandbox_name": "sbx_yuxd_1.slice", "devices": []string{"1"}})
@@ -55,6 +61,10 @@ func TestAcquireWaitsForQueuedResult(t *testing.T) {
 	}
 	if polls != 2 || !strings.Contains(out.String(), "sbx_yuxd_1.slice") {
 		t.Fatalf("polls=%d out=%s", polls, out.String())
+	}
+	if !strings.Contains(out.String(), "priority 0, rank 2") ||
+		!strings.Contains(out.String(), "priority 0, rank 1") {
+		t.Fatalf("missing queue position updates: %s", out.String())
 	}
 }
 

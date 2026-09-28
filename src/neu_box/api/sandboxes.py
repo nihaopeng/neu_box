@@ -262,6 +262,7 @@ def acquire():
             return {
                 'acquire_id': pending.request_id,
                 'status': 'queued',
+                'queue_position': queue.priority_rank(pending.request_id),
                 'message': '资源暂不可用，申请已进入调度队列',
             }, 202
         except Exception:

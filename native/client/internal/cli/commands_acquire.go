@@ -133,7 +133,8 @@ func (a *app) runTerminalAcquire(options acquireOptions) int {
 	}
 	if status == http.StatusAccepted {
 		var queued struct {
-			AcquireID string `json:"acquire_id"`
+			AcquireID     string         `json:"acquire_id"`
+			QueuePosition *queuePosition `json:"queue_position"`
 		}
 		if err := api.DecodeJSON(raw, &queued); err != nil || queued.AcquireID == "" {
 			return a.internalError("invalid_worker_response", errors.New("Worker 排队响应缺少 acquire_id"))
@@ -141,6 +142,14 @@ func (a *app) runTerminalAcquire(options acquireOptions) int {
 		if interrupted || interruptPending() {
 			// Ctrl-C 在请求飞行途中就按下去了：请求已经排上队，直接取消。
 			return a.cancelQueuedAcquire(queued.AcquireID)
+		}
+		lastPosition := formatQueuePosition(queued.QueuePosition)
+		if !a.jsonOutput {
+			fields := []outputField{{"state", "queued"}, {"id", queued.AcquireID}}
+			if queued.QueuePosition != nil {
+				fields = append(fields, outputField{"position", lastPosition})
+			}
+			printFields(a.out, fields...)
 		}
 		// 阻塞在这里轮询，直到拿到卡；期间 Ctrl-C 会走取消路径。
 		for status == http.StatusAccepted {
@@ -155,6 +164,18 @@ func (a *app) runTerminalAcquire(options acquireOptions) int {
 			}
 			if err := api.ResponseError(status, raw); err != nil {
 				return a.workerFailure(status, raw)
+			}
+			if status == http.StatusAccepted && !a.jsonOutput {
+				var current struct {
+					QueuePosition *queuePosition `json:"queue_position"`
+				}
+				if api.DecodeJSON(raw, &current) == nil && current.QueuePosition != nil {
+					position := formatQueuePosition(current.QueuePosition)
+					if position != lastPosition {
+						printFields(a.out, outputField{"position", position})
+						lastPosition = position
+					}
+				}
 			}
 		}
 	}

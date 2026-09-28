@@ -181,10 +181,10 @@ def test_card_less_tasks_are_not_blocked_by_a_queued_card_task(multi_card):
 
 
 def test_priority_multi_card_request_is_not_half_allocated(multi_card):
-    """77 · 高优先级要 2 张、只有 1 张空：整单排队，不许占住那张空卡。
+    """77 · 高优先级要 2 张、只有 1 张空：整单排队，并为它保留目标卡。
 
     45/46 验的是同一条规则的单卡版本；这条加上"高优先级"，盯的是最容易被写漏的
-    组合分支：整单分配失败时既不能半分配，也不能把仅剩的空卡预占住。
+    组合分支：整单分配失败时不能半分配；空闲的目标卡应为高优先级保留。
 
     判据必须只依赖**我们自己**的占位：早先这版想把"除一张以外的空闲卡全占住"
     来制造"只有 1 张空"，但机器的空闲卡是活的 —— 有外部作业在跑时，它中途结束会
@@ -208,9 +208,8 @@ def test_priority_multi_card_request_is_not_half_allocated(multi_card):
     assert entry is not None and entry["status"] == "queued", entry
     assert entry["devices"] == [], f"整单排队的任务不该预占设备: {entry}"
 
-    low_task = multi_card.wait_task(low, timeout=60)
-    assert low_task["status"] == "completed", low_task.get("result")
-    assert [_minor(item) for item in low_task["devices"]] == [free], low_task
+    low_entry = multi_card.queue_entry(low)
+    assert low_entry is not None and low_entry["status"] == "queued", low_entry
 
     entry = multi_card.queue_entry(high)
     assert entry is not None and entry["status"] == "queued", (
@@ -226,6 +225,9 @@ def test_priority_multi_card_request_is_not_half_allocated(multi_card):
         "两张卡都空出来之后，整单排队的任务还没跑"
     )
     assert sorted(_minor(item) for item in high_task["devices"]) == sorted([free, busy])
+    low_task = multi_card.wait_task(low)
+    assert low_task["status"] == "completed", low_task.get("result")
+    assert [_minor(item) for item in low_task["devices"]] == [free], low_task
     multi_card.wait_idle_at_least(baseline)
 
 
@@ -251,7 +253,8 @@ def test_queue_positions_stay_contiguous_after_cancel(single_card):
 
     def queued_entries() -> list[tuple]:
         return [
-            (entry.get("kind"), entry.get("id"), entry.get("position"))
+            (entry.get("kind"), entry.get("id"), entry.get("position"),
+             entry.get("queue_position"))
             for entry in single_card.queue()
             if entry.get("status") == "queued"
         ]
@@ -262,6 +265,8 @@ def test_queue_positions_stay_contiguous_after_cancel(single_card):
     assert positions == list(range(positions[0], positions[0] + len(positions))), (
         f"排队条目的 position 不连续: {before}"
     )
+    assert before[0][3]["priority"] == before[1][3]["priority"] == 0, before
+    assert before[1][3]["rank"] == before[0][3]["rank"] + 1, before
 
     cancelled = single_card.client.cancel_entry(request_id, kind="acquire")
     assert cancelled.status == 200, cancelled.text
@@ -271,6 +276,7 @@ def test_queue_positions_stay_contiguous_after_cancel(single_card):
     assert after[0][2] == positions[0], (
         f"取消之后后面那条没有顶上前一个位置（留下空洞）: 前={before} 后={after}"
     )
+    assert after[0][3] == before[0][3], (before, after)
 
     single_card.client.delete_tasks([blocker])
     single_card.wait_task(blocker)

@@ -125,8 +125,8 @@ def test_multi_device_request_is_not_partially_allocated(multi_card):
     multi_card.wait_idle_at_least(baseline)
 
 
-def test_unsatisfiable_head_does_not_block_free_device(multi_card):
-    """46 · 队首任务等的卡没空时，后面只要空闲那张卡的任务照跑。"""
+def test_high_priority_head_reserves_needed_free_device(multi_card):
+    """46 · 高优先级请求等卡时，普通任务不能占走它所需的空闲卡。"""
     first, second = multi_card.require_idle(2)
     baseline = multi_card.idle_devices()
 
@@ -135,12 +135,12 @@ def test_unsatisfiable_head_does_not_block_free_device(multi_card):
 
     # 高优先级那条要 first+second，而 first 被占 —— 它拿不到整单。
     head = multi_card.submit("sleep 1", device_ids=[first, second], priority=1)
-    # 低优先级这条只要 second，而 second 是空的。
+    # 低优先级这条只要 second；它会延长高优先级请求的等待。
     tail = multi_card.submit("sleep 1", device_ids=[second], priority=0)
 
-    tail_task = multi_card.wait_task(tail)
-    assert tail_task["status"] == "completed", tail_task
-    assert _devices_of(tail_task) == [second], tail_task["devices"]
+    time.sleep(multi_card.poll * 2)
+    tail_entry = multi_card.queue_entry(tail)
+    assert tail_entry is not None and tail_entry["status"] == "queued", tail_entry
     entry = multi_card.queue_entry(head)
     assert entry is not None and entry["status"] == "queued", (
         f"排在前面、要 [{first}, {second}] 的任务 {head} 应该还在排队，"
@@ -152,6 +152,8 @@ def test_unsatisfiable_head_does_not_block_free_device(multi_card):
     head_task = multi_card.wait_task(head)
     assert head_task["status"] == "completed", head_task.get("result")
     assert sorted(_devices_of(head_task)) == sorted([first, second]), head_task
+    tail_task = multi_card.wait_task(tail)
+    assert tail_task["status"] == "completed", tail_task
     multi_card.wait_idle_at_least(baseline)
 
 

@@ -10,6 +10,19 @@ from neu_box import ctl
 from neu_box.maintenance import pause, runtime_config, setup
 
 
+def test_pause_interrupt_returns_clean_message(monkeypatch, capsys):
+    monkeypatch.setattr(ctl, 'load_role_environment', lambda *_args: object())
+
+    def interrupt(*_args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ctl, '_run_control', interrupt)
+    assert ctl.main(['pause']) == 130
+    error = capsys.readouterr().err
+    assert 'Worker 保持暂停' in error
+    assert 'Traceback' not in error
+
+
 def _executable(path: Path) -> Path:
     path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     path.chmod(0o755)

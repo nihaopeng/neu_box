@@ -225,23 +225,20 @@ class DockerCommandExecutor(CommandBackend):
             'docker_container_not_ready',
         )
 
-    def _verify_registration(self, identity: ContainerIdentity) -> None:
+    def _verify_registration(self, identity: ContainerIdentity, client) -> None:
         """复核 runtime 启动钩子已经把这个容器登记到**本**沙盒。
 
-        只允许在身份可读（容器还活着）时调用，这个前提就是本检查的全部
-        依据：**读得到身份 ⇒ 记录不可能已经被收走**。收尸线程只在 init
-        进程退出后才 ``release_container``（pidfd 可读 = 进程已退出），
-        身份读得出来就说明它还没退出，所以此时"查不到记录"只可能是
-        "压根没登记过"（runtime 没配好 / hook 没跑），可以 fail-closed。
-
-        反过来，容器已经退出时这条推理不成立 —— 记录可能已经被收走，
-        见 ``_run_blocking`` 里 ``identity is None`` 那一支。
+        身份读取与 DB 查询之间，短命令可能退出，pidfd 收尸也可能先删掉
+        登记。记录缺失时要复查容器状态；仍在运行才可判定 hook 未登记。
         """
         # The OCI runtime hook must have registered this container before
         # the payload was exec'd.  The executor only verifies and adopts
         # that record; it must never perform a late registration after
         # the first NPU initialization window.
         registered = self.sbx.db.get_container(identity.mount_namespace)
+        if registered is None and not self._state(client).get('Running'):
+            self.log.write('[neu-box] 容器已退出，runtime 登记已清理或无法复核\n')
+            return
         if not registered or registered.get('sandbox_name') != self.sandbox_name:
             raise DockerExecutorError(
                 '容器未在 runtime 启动钩子中登记',
@@ -389,7 +386,7 @@ class DockerCommandExecutor(CommandBackend):
                     self._init_host_pid = identity.init_host_pid
                     self._init_start_time = identity.init_start_time
                     self._mount_namespace = identity.mount_namespace
-                self._verify_registration(identity)
+                self._verify_registration(identity, client)
             else:
                 # 容器跑得比我们看它更快（echo 这类几毫秒的命令）。这一支
                 # **不复核登记**，两个观测点都已经合法地清干净了：身份随

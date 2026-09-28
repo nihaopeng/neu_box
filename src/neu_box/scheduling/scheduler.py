@@ -4,9 +4,9 @@
 （两个有序桶、running、锁）仍然归 ``queue.py`` 的 ``TaskQueue`` —— 这里只负责
 "什么时候取下一个、取哪个、取不到怎么办"，两者合成一个类。
 
-策略是 **first-schedulable**：每轮先探测一次设备池（昂贵，所以只跑一次），再按
-「优先级 DESC → FIFO」扫一遍队列，找**第一个当前资源足够**的条目投放。队首在
-等卡时不会挡住后面不需要这张卡的条目。
+每轮先探测一次设备池（昂贵，所以只跑一次），再按「优先级 DESC → FIFO」
+寻找当前能分配的条目。高优先级请求等卡时，普通请求只能使用不会延长它等待
+时间的设备；不需要设备的普通请求照常运行。已在运行的任务不被抢占。
 
 两条硬约束（都是踩过坑换来的）：
 
@@ -57,7 +57,7 @@ class SchedulerMixin:
     def _pick_schedulable(self):
         """按调度顺序找第一个当前资源足够的条目；没有就返回 None。
 
-       设备池每轮最多探测一次，而且只在这一轮**确实有条目要卡**时才探 —— 队列
+        设备池每轮最多探测一次，而且只在这一轮**确实有条目要卡**时才探 —— 队列
         里全是不要卡的任务时一次 npu-smi 都不跑。
         """
         if SbxManager.get_instance().allocations_paused():
@@ -72,9 +72,36 @@ class SchedulerMixin:
         # 但整个回合由 `_round_lock` 罩着，所以探测期间队列不会被改。
         free = resources.free_devices() if needs_probe else []
         with self._lock:
-            for (kind, identifier), value in self._ordered():
+            high = list(self._queues[1].items())
+            normal = list(self._queues[0].items())
+            for (kind, identifier), value in high:
                 if resources.is_schedulable(value, free):
                     return kind, identifier
+
+            # A waiting high-priority request reserves the cards it may need.
+            # An automatic-count request can take any free card; without a
+            # reliable completion deadline, launching a normal GPU workload
+            # could delay it indefinitely. Explicit requests only reserve
+            # their named cards, allowing disjoint normal work to proceed.
+            reserved = set()
+            reserve_all = False
+            for _key, value in high:
+                ids, num = resources.device_request(value)
+                reserved.update(ids)
+                if num > 0 and not ids:
+                    reserve_all = True
+            for (kind, identifier), value in normal:
+                if not resources.is_schedulable(value, free):
+                    continue
+                ids, num = resources.device_request(value)
+                if ids and (reserve_all or reserved.intersection(ids)):
+                    continue
+                # allocate() gives automatic requests the first N free
+                # devices. Permit them only when that exact prefix is
+                # disjoint from the high-priority reservation.
+                if num > 0 and (reserve_all or reserved.intersection(free[:num])):
+                    continue
+                return kind, identifier
         return None
 
     async def _consume_loop(self):

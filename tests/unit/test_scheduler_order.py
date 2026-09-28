@@ -1,4 +1,4 @@
-"""调度队列的顺序与挑选逻辑（两个有序桶 + first-schedulable）。
+"""调度队列的顺序与挑选逻辑（两个有序桶与高优先级设备保留）。
 
 这里只测"挑哪一个、按什么顺序挑、探测几次"——这些是纯内存判断，
 不需要 root、不需要 Docker、不需要真的跑 npu-smi。
@@ -79,8 +79,8 @@ def test_fifo_within_a_bucket(monkeypatch):
     assert [i for i, _v in queue._pending_items('task')] == ['a', 'b', 'c']
 
 
-def test_head_waiting_for_a_card_does_not_block_the_rest(monkeypatch):
-    """first-schedulable：队首要的卡被占，后面的任务照跑。"""
+def test_high_request_allows_disjoint_normal_work(monkeypatch):
+    """高优先级请求等指定卡时，普通任务可使用不相交的卡。"""
     _install(monkeypatch, free=['234:4'])
     queue = _queue()
     # 队首（更高优先级）要 234:0，而 234:0 没空
@@ -92,6 +92,45 @@ def test_head_waiting_for_a_card_does_not_block_the_rest(monkeypatch):
     queue._enqueue('task', 'cpu', _task('cpu'), 0)
 
     assert queue._pick_schedulable() == ('task', 'ok')
+
+
+def test_high_request_reserves_its_needed_free_cards(monkeypatch):
+    _install(monkeypatch, free=['234:1'])
+    queue = _queue()
+    queue._enqueue('task', 'high', _task('high', priority=1,
+                                       device_ids=['234:0', '234:1']), 1)
+    queue._enqueue('task', 'low', _task('low', device_ids=['234:1']), 0)
+    queue._enqueue('task', 'cpu', _task('cpu'), 0)
+
+    assert queue._pick_schedulable() == ('task', 'cpu')
+
+
+def test_normal_automatic_request_uses_disjoint_free_prefix(monkeypatch):
+    _install(monkeypatch, free=['234:1', '234:2'])
+    queue = _queue()
+    queue._enqueue('task', 'high', _task('high', priority=1,
+                                       device_ids=['234:0', '234:2']), 1)
+    queue._enqueue('task', 'normal', _task('normal', device_num=1), 0)
+
+    assert queue._pick_schedulable() == ('task', 'normal')
+
+
+def test_high_auto_count_blocks_new_normal_device_work(monkeypatch):
+    _install(monkeypatch, free=['234:1', '234:2'])
+    queue = _queue()
+    queue._enqueue('task', 'high', _task('high', priority=1, device_num=4), 1)
+    queue._enqueue('task', 'low', _task('low', device_num=1), 0)
+
+    assert queue._pick_schedulable() is None
+
+
+def test_high_request_runs_as_soon_as_resources_are_available(monkeypatch):
+    _install(monkeypatch, free=['234:0', '234:1'])
+    queue = _queue()
+    queue._enqueue('task', 'high', _task('high', priority=1, device_num=2), 1)
+    queue._enqueue('task', 'low', _task('low', device_num=1), 0)
+
+    assert queue._pick_schedulable() == ('task', 'high')
 
 
 def test_pure_cpu_queue_never_probes_devices(monkeypatch):
@@ -133,6 +172,20 @@ def test_dequeue_and_lookup_work_across_buckets():
     assert queue._lookup('task', 'high') is None
     assert queue._count('task') == 1
     assert queue._dequeue('task', 'missing') is False
+
+
+def test_queue_position_is_priority_then_rank_across_tasks_and_acquires():
+    queue = _queue()
+    queue._enqueue('task', 'low-a', _task('low-a'), 0)
+    queue._enqueue('acquire', 'high-a', _acquire('high-a', priority=1), 1)
+    queue._enqueue('task', 'low-b', _task('low-b'), 0)
+    queue._enqueue('task', 'high-b', _task('high-b', priority=1), 1)
+
+    assert queue.priority_rank('high-a') == {'priority': 1, 'rank': 1}
+    assert queue.priority_rank('high-b') == {'priority': 1, 'rank': 2}
+    assert queue.priority_rank('low-a') == {'priority': 0, 'rank': 1}
+    assert queue.priority_rank('low-b') == {'priority': 0, 'rank': 2}
+    assert queue.priority_rank('missing') is None
 
 
 def test_consume_loop_lets_spawned_coroutines_run():

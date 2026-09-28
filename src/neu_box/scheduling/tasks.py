@@ -40,6 +40,7 @@ def public(task: dict) -> dict:
         'command': task['command'], 'status': task['status'],
         'mode': mode,
         'position': task.get('position', 0),
+        'queue_position': task.get('queue_position'),
         'priority': task.get('priority', 0) or 0,
         'cpu': task.get('cpu', 0), 'est_time': task.get('est_time', 0) or 0,
         'eta': task.get('eta'), 'mem': task.get('mem', '0'),
@@ -50,6 +51,8 @@ def public(task: dict) -> dict:
         'started_at': task.get('started_at'),
         'finished_at': task.get('finished_at'),
     }
+    if task['status'] == 'running':
+        item['sandbox_name'] = sandbox_name(task)
     if mode == 'script':
         item['script'] = task['command']
     elif mode == 'argv':

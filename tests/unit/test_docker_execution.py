@@ -5,8 +5,8 @@
   - 容器跑得比执行器看它更快时（``echo`` 这类），**不能**报失败 —— 身份随
     ``/proc`` 一起消失、登记记录又被 pidfd 收尸线程删掉，两个观测点都被合法
     地清干净了，据此报错就是拿"看不见"当"不存在"。
-  - 容器还活着时，登记复核照旧 fail-closed —— 身份读得出来就说明记录不可能
-    已经被收走，此时"查不到"只能是"从没登记过"。
+  - 容器复查时仍在运行，登记复核照旧 fail-closed；此时缺失的记录不能
+    解释为正常收尸。
 
 两条针对的是同一次改动的两侧，缺一条都会让"把复核整个删掉"这种改法看起来
 是对的。
@@ -238,6 +238,21 @@ def test_exited_container_skips_the_registration_probe(monkeypatch, tmp_path):
         in open(executor.log.path, encoding='utf-8').read()
     ), '跳过复核这件事要留在任务日志里'
     assert manager.released == [], '没有身份可采纳，注销交给对账'
+
+
+def test_container_exits_between_identity_read_and_registration_check(
+        monkeypatch, tmp_path):
+    """短命令在两次观测之间退出，旧登记可能已由 pidfd 清理。"""
+    executor, _manager = _executor(monkeypatch, tmp_path)
+    _patch_client(monkeypatch, _Client(running=False, exit_code=0))
+    _live_identity(monkeypatch)
+
+    outcome = executor._run_blocking(timeout=None)
+
+    assert outcome['error'] is None, outcome
+    assert outcome['returncode'] == 0, outcome
+    assert '登记已清理或无法复核' in open(
+        executor.log.path, encoding='utf-8').read()
 
 
 # ── 还活着的容器: 复核照旧 fail-closed ───────────────────────────

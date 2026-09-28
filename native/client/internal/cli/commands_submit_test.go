@@ -255,9 +255,10 @@ func TestSubmitPriority(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		decodeRequest(t, request, &received)
 		writeJSON(t, writer, http.StatusAccepted, map[string]any{
-			"task_id":  "abc123",
-			"position": 1,
-			"priority": 1,
+			"task_id":        "abc123",
+			"position":       1,
+			"priority":       1,
+			"queue_position": map[string]int{"priority": 1, "rank": 1},
 		})
 	}))
 	defer server.Close()
@@ -272,7 +273,7 @@ func TestSubmitPriority(t *testing.T) {
 	if received.Priority != 1 {
 		t.Fatalf("unexpected priority: %+v", received)
 	}
-	if !strings.Contains(out.String(), "priority: 1") {
+	if !strings.Contains(out.String(), "priority 1, rank 1") {
 		t.Fatalf("missing priority notice: %s", out.String())
 	}
 

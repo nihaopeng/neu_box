@@ -62,6 +62,7 @@ def public(session: dict) -> dict:
         'priority': session.get('priority', 0) or 0,
         'code': session.get('code'),
         'position': session.get('position', 0),
+        'queue_position': session.get('queue_position'),
         'eta': session.get('eta'),
         'created_at': session.get('requested_at'),
         'started_at': session.get('acquired_at'),

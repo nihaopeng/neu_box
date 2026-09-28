@@ -60,7 +60,7 @@ neubox release
 | 命令 | 用途 |
 | --- | --- |
 | `neubox status` | 查询当前 shell 的沙盒与资源 |
-| `neubox list` | 列出沙盒及资源 |
+| `neubox list` | 列出所有用户的活跃任务、申请和沙盒；`--sandboxes` 只看沙盒 |
 | `neubox release` | 释放当前 shell 的沙盒 |
 | `neubox release SANDBOX` | 释放指定沙盒 |
 

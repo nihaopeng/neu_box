@@ -142,6 +142,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "test":
             return _exec_or_fail(ACCEPTANCE, list(args.args))
         parser.error(f"未知命令: {args.command}")
+    except KeyboardInterrupt:
+        if args.command == "pause":
+            print(
+                "neuboxctl: 等待已中断；Worker 保持暂停。资源释放后请重新执行 neuboxctl pause。",
+                file=sys.stderr,
+            )
+        else:
+            print("neuboxctl: 操作已中断。", file=sys.stderr)
+        return 130
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"neuboxctl: {exc}", file=sys.stderr)
         return 1

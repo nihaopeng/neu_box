@@ -16,13 +16,27 @@ type taskQueueResponse struct {
 	TotalPending int               `json:"total_pending"`
 }
 
+type queuePosition struct {
+	Priority int `json:"priority"`
+	Rank     int `json:"rank"`
+}
+
+func formatQueuePosition(position *queuePosition) string {
+	if position == nil || position.Rank <= 0 {
+		return "none"
+	}
+	return fmt.Sprintf("priority %d, rank %d", position.Priority, position.Rank)
+}
+
 // defaultTasksWindow 是 tasks 默认视图的时间窗：已完成/失败的任务只展示
 // finished_at 在窗口内的；活跃任务（queued/running）不受窗口限制。
 const defaultTasksWindow = 2 * time.Hour
 
 type tasksOptions struct {
-	all   bool
-	since time.Duration
+	all       bool
+	history   bool
+	sandboxes bool
+	since     time.Duration
 }
 
 func parseTasksOptions(args []string) (tasksOptions, error) {
@@ -31,6 +45,11 @@ func parseTasksOptions(args []string) (tasksOptions, error) {
 		switch args[index] {
 		case "--all":
 			options.all = true
+			options.history = true
+		case "--history":
+			options.history = true
+		case "--sandboxes":
+			options.sandboxes = true
 		case "--since":
 			raw, err := optionValue(args, &index)
 			if err != nil {
@@ -41,17 +60,26 @@ func parseTasksOptions(args []string) (tasksOptions, error) {
 				return options, fmt.Errorf("--since 必须是正数时间间隔，例如 30m 或 6h：%q", raw)
 			}
 			options.since = duration
+			options.history = true
 		default:
-			return options, fmt.Errorf("未知 tasks 选项: %s", args[index])
+			return options, fmt.Errorf("未知 list 选项: %s", args[index])
 		}
+	}
+	if options.sandboxes && options.history {
+		return options, fmt.Errorf("--sandboxes 不能与历史记录选项同时使用")
 	}
 	return options, nil
 }
 
-func (a *app) runTasks(args []string) int {
+func (a *app) runTasks(args []string) int { return a.runList(args) }
+
+func (a *app) runList(args []string) int {
 	options, err := parseTasksOptions(args)
 	if err != nil {
 		return a.usageError(err.Error())
+	}
+	if options.sandboxes {
+		return a.runSandboxList(nil)
 	}
 	status, raw, err := a.worker.Request(
 		http.MethodGet,
@@ -70,9 +98,45 @@ func (a *app) runTasks(args []string) int {
 		return a.internalError("invalid_worker_response", err)
 	}
 	visible, hidden := filterTaskList(response.Queue, options)
+	// A sandbox normally belongs to a running task or an active acquire. Keep
+	// any other live sandbox visible as its own row instead of silently dropping
+	// an allocation from the overview.
+	sandboxStatus, sandboxRaw, err := a.worker.Request(http.MethodGet, "/sandbox/list", nil, nil)
+	if err != nil {
+		return a.requestError(err)
+	}
+	if err := api.ResponseError(sandboxStatus, sandboxRaw); err != nil {
+		return a.workerFailure(sandboxStatus, sandboxRaw)
+	}
+	var sandboxes sandboxListResponse
+	if err := api.DecodeJSON(sandboxRaw, &sandboxes); err != nil {
+		return a.internalError("invalid_worker_response", err)
+	}
+	linked := make(map[string]bool)
+	for _, entry := range visible {
+		var item taskResultResponse
+		if api.DecodeJSON(entry, &item) == nil && item.Sandbox != "" {
+			linked[item.Sandbox] = true
+		}
+	}
+	for _, sandbox := range sandboxes.Sandboxes {
+		if linked[sandbox.Name] {
+			continue
+		}
+		entry, err := json.Marshal(map[string]any{
+			"id": sandbox.Name, "kind": "sandbox",
+			"user_id": sandbox.Owner, "status": strings.ToLower(sandbox.State),
+			"sandbox_name": sandbox.Name, "devices": sandbox.Devices,
+			"cpu": sandbox.CPU, "mem": sandbox.Mem,
+		})
+		if err != nil {
+			return a.internalError("invalid_worker_response", err)
+		}
+		visible = append(visible, entry)
+	}
 
 	if a.jsonOutput {
-		if hidden == 0 {
+		if hidden == 0 && len(visible) == len(response.Queue) {
 			// 没有过滤掉任何条目：直接透传 Worker 原始响应。
 			_ = printJSON(a.out, raw)
 		} else {
@@ -119,11 +183,14 @@ func (a *app) runTasks(args []string) int {
 			if task.Sandbox != "" {
 				item = append(item, outputField{"sandbox", task.Sandbox})
 			}
-		} else {
+		} else if entryKind(task) == "task" {
 			item = append(item, outputField{"command", task.Command})
 		}
-		if task.Position > 0 {
-			item = append(item, outputField{"position", fmt.Sprintf("#%d", task.Position)})
+		if task.Sandbox != "" && entryKind(task) != "acquire" {
+			item = append(item, outputField{"sandbox", task.Sandbox})
+		}
+		if task.QueuePosition != nil {
+			item = append(item, outputField{"position", formatQueuePosition(task.QueuePosition)})
 		}
 		item = append(item, taskResourceFields(task)...)
 		printFields(a.out, item...)
@@ -131,10 +198,8 @@ func (a *app) runTasks(args []string) int {
 	return 0
 }
 
-// filterTaskList 实现 tasks 默认视图：
-//   - 活跃条目（status 为 queued/running，含排队中的 acquire 会话）永远保留；
-//   - 已结束条目按 finished_at（缺失时退回 created_at）是否在窗口内决定；
-//   - 无法解析或没有时间的条目不隐藏（宁多勿漏）。
+// filterTaskList 默认只显示活跃请求。--history 包含时间窗内的终态记录，
+// --all 包含 Worker 返回的全部最近记录。
 //
 // 返回保留的原始条目（JSON 输出时不丢 worker 额外字段）和被隐藏的条目数。
 func filterTaskList(queue []json.RawMessage, options tasksOptions) ([]json.RawMessage, int) {
@@ -144,14 +209,14 @@ func filterTaskList(queue []json.RawMessage, options tasksOptions) ([]json.RawMe
 	cutoff := time.Now().Add(-options.since)
 	visible := make([]json.RawMessage, 0, len(queue))
 	for _, entry := range queue {
-		if taskEntryVisible(entry, cutoff) {
+		if taskEntryVisible(entry, cutoff, options.history) {
 			visible = append(visible, entry)
 		}
 	}
 	return visible, len(queue) - len(visible)
 }
 
-func taskEntryVisible(entry json.RawMessage, cutoff time.Time) bool {
+func taskEntryVisible(entry json.RawMessage, cutoff time.Time, history bool) bool {
 	var probe struct {
 		Status     string   `json:"status"`
 		CreatedAt  *float64 `json:"created_at"`
@@ -160,8 +225,12 @@ func taskEntryVisible(entry json.RawMessage, cutoff time.Time) bool {
 	if err := json.Unmarshal(entry, &probe); err != nil {
 		return true
 	}
-	if probe.Status == "queued" || probe.Status == "running" {
+	if probe.Status == "queued" || probe.Status == "allocating" ||
+		probe.Status == "running" || probe.Status == "active" {
 		return true
+	}
+	if !history {
+		return false
 	}
 	timestamp := probe.FinishedAt
 	if timestamp == nil {
@@ -196,22 +265,23 @@ type taskResult struct {
 }
 
 type taskResultResponse struct {
-	TaskID     string      `json:"task_id"`
-	Kind       string      `json:"kind"`
-	ID         string      `json:"id"`
-	UserID     string      `json:"user_id"`
-	Command    string      `json:"command"`
-	Status     string      `json:"status"`
-	Position   int         `json:"position"`
-	PID        int         `json:"pid"`
-	Sandbox    string      `json:"sandbox_name"`
-	CPU        int         `json:"cpu"`
-	Mem        string      `json:"mem"`
-	DeviceNum  int         `json:"device_num"`
-	Devices    []string    `json:"devices"`
-	CreatedAt  *float64    `json:"created_at"`
-	FinishedAt *float64    `json:"finished_at"`
-	Result     *taskResult `json:"result"`
+	TaskID        string         `json:"task_id"`
+	Kind          string         `json:"kind"`
+	ID            string         `json:"id"`
+	UserID        string         `json:"user_id"`
+	Command       string         `json:"command"`
+	Status        string         `json:"status"`
+	Position      int            `json:"position"`
+	QueuePosition *queuePosition `json:"queue_position"`
+	PID           int            `json:"pid"`
+	Sandbox       string         `json:"sandbox_name"`
+	CPU           int            `json:"cpu"`
+	Mem           string         `json:"mem"`
+	DeviceNum     int            `json:"device_num"`
+	Devices       []string       `json:"devices"`
+	CreatedAt     *float64       `json:"created_at"`
+	FinishedAt    *float64       `json:"finished_at"`
+	Result        *taskResult    `json:"result"`
 }
 
 func (a *app) runResult(args []string) int {

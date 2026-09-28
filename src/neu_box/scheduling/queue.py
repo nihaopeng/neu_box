@@ -297,7 +297,10 @@ class TaskQueue(SchedulerMixin):
         with self._lock:
             request = self._lookup('acquire', request_id)
             if request is not None:
-                return {'status': 'queued'}
+                return {
+                    'status': 'queued',
+                    'queue_position': self.priority_rank(request_id),
+                }
             result = self._acquire_results.get(request_id)
             if result is None:
                 return None
@@ -679,9 +682,15 @@ class TaskQueue(SchedulerMixin):
         waiting.sort(key=lambda pair: entries.sort_key(pair[0]))
         eta = 0
         queued: list[tuple[dict, str]] = []
+        ranks: dict[int, int] = {}
         for position, (value, entry_kind) in enumerate(waiting, 1):
             item = dict(value)
             item['position'] = position
+            priority = entries.priority(value)
+            ranks[priority] = ranks.get(priority, 0) + 1
+            item['queue_position'] = {
+                'priority': priority, 'rank': ranks[priority],
+            }
             item['eta'] = eta
             model = _task_public if entry_kind == 'task' else session_shape.public
             queued.append((model(item), entry_kind))
@@ -722,9 +731,23 @@ class TaskQueue(SchedulerMixin):
                 return position
         return 0
 
+    def priority_rank(self, identifier: str) -> dict | None:
+        """返回队列内的两级位置；task 与 acquire 在同一优先级内混排。"""
+        with self._lock:
+            waiting = [(item_id, value) for (_kind, item_id), value
+                       in self._ordered()]
+        waiting.sort(key=lambda pair: entries.sort_key(pair[1]))
+        ranks: dict[int, int] = {}
+        for item_id, value in waiting:
+            priority = entries.priority(value)
+            ranks[priority] = ranks.get(priority, 0) + 1
+            if item_id == identifier:
+                return {'priority': priority, 'rank': ranks[priority]}
+        return None
+
     def pending_count(self) -> int:
         with self._lock:
-            return self._count('task')
+            return self._count('task') + self._count('acquire')
 
     def get_result(self, task_id: str) -> dict | None:
         task = self._db.get_task(task_id)

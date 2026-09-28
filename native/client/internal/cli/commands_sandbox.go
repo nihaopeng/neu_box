@@ -68,9 +68,9 @@ type sandboxListResponse struct {
 	CurrentSandbox *string         `json:"current_sandbox"`
 }
 
-func (a *app) runList(args []string) int {
+func (a *app) runSandboxList(args []string) int {
 	if len(args) != 0 {
-		return a.usageError("用法: neubox list")
+		return a.usageError("用法: neubox list --sandboxes")
 	}
 	status, raw, err := a.worker.Request(http.MethodGet, "/sandbox/list", nil, nil)
 	if err != nil {

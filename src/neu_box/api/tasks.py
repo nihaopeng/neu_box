@@ -137,6 +137,7 @@ def create_task():
     return {
         'task_id': task_id,
         'position': position,
+        'queue_position': queue.priority_rank(task_id),
         'priority': task.get('priority', 0) if task else 0,
         'target': public_execution_target(target),
         'message': (

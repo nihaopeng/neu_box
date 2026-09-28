@@ -35,6 +35,9 @@ def test_submit_script_api_preserves_original_text(monkeypatch):
         def position(self, task_id):
             return 1
 
+        def priority_rank(self, task_id):
+            return {'priority': 0, 'rank': 1}
+
     class Db:
         def get_task(self, task_id):
             return {'priority': 0}
