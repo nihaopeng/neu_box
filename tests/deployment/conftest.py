@@ -4,7 +4,7 @@
 ``pytest.fail`` 并把缺的东西写进消息 —— 这是部署验收，不是开发机上的便利
 测试。``tests/integration/`` 那两层的 skip 语义在这里是反的。
 
-十个文件就是十个组，按"越靠后越贵"排（``_FILE_ORDER``）：基本盘（不碰卡）→
+十一个文件就是十一个组，按"越靠后越贵"排（``_FILE_ORDER``）：基本盘（不碰卡）→
 单卡 → 多卡 → 调度 → 容器 → 收尸（要跨收尸周期）→ 维护（停/起服，独占，必须
 最后）。pytest 默认按文件名字母序收集，和这个顺序不一样（``scheduling`` 会插到
 ``single_device`` 前面、``reaper`` 会跑到最后），所以顺序在这里显式钉住。
@@ -53,9 +53,10 @@ _FILE_ORDER = (
     "test_containers.py",     # 5. 容器 / OCI runtime
     "test_client.py",         # 6. client(neubox) 基本路径与 shell
     "test_client_docker.py",  # 7. client 容器路径：run / start / restart / status
-    "test_driver_isolation.py",  # 8. 驱动侧隔离：读 /proc/uda 验 UDA 表
-    "test_reaper.py",         # 9. 收尸：每条都要跨收尸周期
-    "test_maintenance.py",    # 10. 停机维护：停/起服，必须最后
+    "test_submit_script.py",  # 8. 真 CLI 的脚本快照、退出码与容器任务
+    "test_driver_isolation.py",  # 9. 驱动侧隔离：读 /proc/uda 验 UDA 表
+    "test_reaper.py",         # 10. 收尸：每条都要跨收尸周期
+    "test_maintenance.py",    # 11. 停机维护：停/起服，必须最后
 )
 
 # client 组要求的最低 neubox 版本。

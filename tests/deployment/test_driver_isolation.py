@@ -18,7 +18,8 @@
 指针），和 `readlink /proc/<pid>/ns/mnt` 不是一个数；按 `root_tgid` 对最稳。
 
 表是在**该 namespace 里第一个进程真正初始化驱动**时建的，之后按 ns 缓存，所以
-容器里必须先跑一次设备访问（下面用"逐个 open davinciN + npu-smi"来触发）。
+容器里必须先跑一次真正的驱动初始化（下面用 torch_npu）；单独 open 设备节点
+或运行 `npu-smi info` 都不足以证明 UDA 表已经建立。
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -43,11 +45,27 @@ _ASCEND_DRIVER = "/usr/local/Ascend/driver"
 _ASCEND_INFO = "/etc/ascend_install.info"
 _AUX_DEVICES = ["/dev/davinci_manager", "/dev/devmm_svm", "/dev/hisi_hdc"]
 
-# 容器侧的探测：先把每张 davinci 节点试开一遍（这是"这个 ns 占用了哪些卡"的
-# 来源，也是 eBPF 真正拦的那一步），再跑 npu-smi 让驱动把表建出来。
+# 容器侧先逐个 open 设备节点，让驱动记录这个 mount namespace 占用的卡；
+# 然后用 torch_npu 初始化驱动并留住 init PID，供宿主读取 UDA 表。npu-smi info
+# 走 DCMI/manager，不会建立 namespace_node；alpine 也没有 torch_npu 用户态。
+_CONTAINER_PROBE_PYTHON = (
+    "import time\n"
+    "import torch\n"
+    "import torch_npu\n"
+    "print('UDA_PROBE_DEVICES=' + str(torch.npu.device_count()), flush=True)\n"
+    "time.sleep(600)\n"
+)
+_CONTAINER_IMAGE_CHECK_PYTHON = (
+    "import torch\n"
+    "import torch_npu\n"
+)
 _PROBE = (
-    "for n in 0 1 2 3 4 5 6 7; do (exec 3</dev/davinci$n) 2>/dev/null "
-    "&& echo OPEN_$n; done; npu-smi info >/dev/null 2>&1; sleep 600"
+    'for node in /dev/davinci[0-9]*; do '
+    '(exec 3<"$node") 2>/dev/null && echo "OPEN_${node##*/}"; '
+    'done; '
+    'python=$(command -v python3 || command -v python) || '
+    '{ echo "UDA_PROBE_ERROR=python_not_found" >&2; exit 125; }; '
+    'exec "$python" -u -c ' + shlex.quote(_CONTAINER_PROBE_PYTHON)
 )
 
 # 宿主侧触发驱动建 UDA 节点，得让进程真的"取到"一张 UDA 设备：`npu-smi info`
@@ -234,18 +252,121 @@ def _namespace_rows() -> list[dict]:
     return rows
 
 
-def _wait_row(pid: int, *, timeout: float = 30.0) -> dict:
-    """等驱动给这个 PID 的 namespace 建出节点。"""
+def _probe_container_state(reference: str) -> tuple[bool, str]:
+    """取探针存活状态；只在失败时另取日志，避免轮询 Docker 日志。"""
+    state = subprocess.run(
+        ["docker", "inspect", "--format",
+         "{{.State.Running}} exit={{.State.ExitCode}}", reference],
+        capture_output=True, text=True, timeout=20,
+    )
+    return (
+        state.returncode == 0 and state.stdout.startswith("true"),
+        (state.stdout or state.stderr).strip()[:250],
+    )
+
+
+def _probe_container_diagnostics(reference: str) -> str:
+    _, state = _probe_container_state(reference)
+    logs = subprocess.run(
+        ["docker", "logs", reference],
+        capture_output=True, text=True, timeout=20,
+    )
+    return (
+        f"docker inspect: {state}; docker logs: "
+        f"{((logs.stdout or '') + (logs.stderr or '')).strip()[-1500:]}"
+    )
+
+
+def _probe_container_logs(reference: str) -> str:
+    logs = subprocess.run(
+        ["docker", "logs", reference],
+        capture_output=True, text=True, timeout=20,
+    )
+    return logs.stdout
+
+
+def _probe_device_count(logs: str) -> int | None:
+    marker = re.search(r"^UDA_PROBE_DEVICES=(\d+)$", logs, re.MULTILINE)
+    return int(marker.group(1)) if marker else None
+
+
+def _wait_row(pid: int, *, reference: str | None = None,
+              timeout: float = 90.0) -> dict:
+    """等驱动给这个 PID 的 namespace 建出节点，并及时报告探针退出。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         for row in _namespace_rows():
             if row['root_tgid'] == pid:
+                if reference:
+                    count = _probe_device_count(_probe_container_logs(reference))
+                    if count is None:
+                        break  # open 已建表，但 torch_npu 还未返回；继续等真正的探测结果
+                    assert count == row['dev_num'], (
+                        f"torch_npu 报告 {count} 张卡，但 UDA 节点记录 "
+                        f"{row['dev_num']} 张：{row}。"
+                        f"{_probe_container_diagnostics(reference)}"
+                    )
                 return row
+        if reference:
+            running, _ = _probe_container_state(reference)
+            if not running:
+                pytest.fail(
+                    f"容器探针尚未建出 UDA 节点就已退出（root_tgid={pid}）。"
+                    f"镜像需要可用的 Python、torch_npu 和 CANN 用户态；"
+                    f"alpine:3.20 不满足这个前提。"
+                    f"{_probe_container_diagnostics(reference)}",
+                    pytrace=False,
+                )
         time.sleep(0.25)
+    detail = ""
+    if reference:
+        detail = _probe_container_diagnostics(reference)
     pytest.fail(
         f"{_NAMESPACE_NODE} 里 {timeout:.0f}s 内没有 root_tgid={pid} 的节点："
-        f"这个 ns 里的进程没有真正初始化驱动（探测命令没起来，或者 npu-smi 在容器里"
-        f"跑不了）",
+        f"容器探针未真正初始化驱动；需要包含 torch_npu/CANN 的镜像。{detail}",
+        pytrace=False,
+    )
+
+
+def _assert_unregistered_probe_sees_no_cards(reference: str, *,
+                                             timeout: float = 90.0) -> None:
+    """零卡容器可能根本没有 UDA 行；以真实探针结果与 open 拒绝为准。"""
+    pid = _container_pid(reference)
+    deadline = time.time() + timeout
+    zero_since: float | None = None
+    while time.time() < deadline:
+        logs = _probe_container_logs(reference)
+        count = _probe_device_count(logs)
+        row = next(iter(_namespace_rows_for_pid(pid)), None)
+        if count is not None:
+            assert count == 0, (
+                f"未登记容器的 torch_npu 报告 {count} 张卡；"
+                f"UDA 行：{row}。{_probe_container_diagnostics(reference)}"
+            )
+            assert not re.search(r"^OPEN_davinci\d+$", logs, re.MULTILINE), (
+                f"未登记容器打开了受管设备节点：{logs[-1500:]}"
+            )
+            if row is not None:
+                assert row['dev_num'] == 0, (
+                    f"未登记容器的 UDA 行含 {row['dev_num']} 张卡：{row}"
+                )
+            if zero_since is None:
+                zero_since = time.time()
+            # device_count() 返回零时驱动可能不建表；稍等一次异步建表，然后
+            # 接受“无表”或“零卡表”，两者都要求探针仍活着且 open 全拒。
+            if time.time() - zero_since >= 2.0:
+                return
+        running, _ = _probe_container_state(reference)
+        if not running:
+            pytest.fail(
+                f"未登记容器的驱动探针提前退出，无法证明零卡隔离。"
+                f"{_probe_container_diagnostics(reference)}",
+                pytrace=False,
+            )
+        time.sleep(0.5)
+    pytest.fail(
+        f"未登记容器 {timeout:.0f}s 内未完成 torch_npu 探测。"
+        f"{_probe_container_diagnostics(reference)}",
         pytrace=False,
     )
 
@@ -461,8 +582,44 @@ def driver_isolation(deployment, container, single_card):
     return deployment
 
 
+@pytest.fixture(scope="session")
+def driver_probe_image(driver_isolation, single_card):
+    """UDA 断言必须使用明确指定的、含 torch_npu/CANN 的本地镜像。"""
+    image = os.environ.get("NEU_BOX_DRIVER_PROBE_IMAGE", "").strip()
+    if not image:
+        pytest.fail(
+            "前置缺失：驱动侧隔离测试需要设置 NEU_BOX_DRIVER_PROBE_IMAGE，"
+            "指向本地含 Python、torch_npu 和匹配 CANN 用户态的镜像。"
+            "NEU_BOX_CONTAINER_IMAGE=alpine:3.20 只适合普通 Docker 测试；"
+            "Alpine 里的 open 与 npu-smi 不会建立 /proc/uda/namespace_node。",
+            pytrace=False,
+        )
+    if image not in single_card.local_images():
+        pytest.fail(
+            f"前置缺失：NEU_BOX_DRIVER_PROBE_IMAGE={image!r} 不在本机镜像列表中；"
+            "驱动测试不会自动拉镜像",
+            pytrace=False,
+        )
+    check = single_card.docker_run(
+        "--rm", "-v", f"{_ASCEND_DRIVER}:{_ASCEND_DRIVER}:ro",
+        "-v", f"{_ASCEND_INFO}:{_ASCEND_INFO}:ro",
+        "--entrypoint", "sh", image, "-c",
+        'python=$(command -v python3 || command -v python) || exit 125; '
+        'exec "$python" -c ' + shlex.quote(_CONTAINER_IMAGE_CHECK_PYTHON),
+        timeout=180,
+    )
+    if check.returncode != 0:
+        pytest.fail(
+            f"前置缺失：镜像 {image!r} 无法加载 Python、torch 或 torch_npu "
+            f"（探测退出码 {check.returncode}）："
+            f"\n{(check.stdout or '')[:1000]}\n{(check.stderr or '')[:1000]}",
+            pytrace=False,
+        )
+    return image
+
+
 def test_registered_container_sees_only_its_sandbox_cards(
-        driver_isolation, single_card, container_image):
+        driver_isolation, single_card, driver_probe_image):
     """61 · 已登记容器：UDA 表里只有沙盒持有的那些卡（cap 守卫的真机回归）。"""
     first, second = single_card.require_idle(2)
     terminal = single_card.spawn_terminal()
@@ -472,8 +629,8 @@ def test_registered_container_sees_only_its_sandbox_cards(
     ) as sandbox:
         name = sandbox["sandbox_name"]
         reference = _start_probe_container(
-            single_card, container_image, annotation=name)
-        row = _wait_row(_container_pid(reference))
+            single_card, driver_probe_image, annotation=name)
+        row = _wait_row(_container_pid(reference), reference=reference)
         assert row['dev_num'] == 2, (
             f"沙盒 {name} 持有 {first}/{second} 两张卡，但驱动给这个容器的 UDA 表里"
             f"有 {row['dev_num']} 张（udevid={row['udevids']}）。超出的部分说明容器被"
@@ -484,15 +641,25 @@ def test_registered_container_sees_only_its_sandbox_cards(
 
 
 def test_unregistered_container_sees_no_cards(
-        driver_isolation, single_card, container_image):
+        driver_isolation, single_card, driver_probe_image):
     """62 · 没经过 neu-box 的容器：一张卡都看不到（fail-closed）。"""
-    reference = _start_probe_container(
-        single_card, container_image, annotation=None)
-    row = _wait_row(_container_pid(reference))
-    assert row['dev_num'] == 0, (
-        f"没有 sandbox_cgroup annotation 的容器竟然拿到 {row['dev_num']} 张卡"
-        f"（udevid={row['udevids']}）—— 未登记的容器必须一张都拿不到，整行：{row}"
-    )
+    device = single_card.require_idle(1)[0]
+    terminal = single_card.spawn_terminal()
+    with single_card.sandbox(
+        single_card.acquire_payload(terminal.pid, device_ids=[device]),
+    ) as sandbox:
+        # 同一镜像先在有授权的容器里建出一张表。否则坏掉的 CANN 镜像也可能
+        # 让无授权容器报告零张卡，形成假阳性。
+        control = _start_probe_container(
+            single_card, driver_probe_image,
+            annotation=sandbox["sandbox_name"],
+        )
+        row = _wait_row(_container_pid(control), reference=control)
+        assert row['dev_num'] == 1 and row['udevids'] == [device], row
+
+        reference = _start_probe_container(
+            single_card, driver_probe_image, annotation=None)
+        _assert_unregistered_probe_sees_no_cards(reference)
 
 
 def test_stale_annotation_cannot_start_driver_workload(
@@ -560,7 +727,7 @@ def test_host_shell_without_reservation_sees_shared_cards(
 
 
 def test_full_capabilities_container_is_not_admin(
-        driver_isolation, single_card, container_image):
+        driver_isolation, single_card, driver_probe_image):
     """64 · `--cap-add=ALL` 的容器：被剪掉一位能力（init 与 docker exec 都剪），
     且仍然只看到沙盒的卡。"""
     device = single_card.require_idle(1)[0]
@@ -571,9 +738,10 @@ def test_full_capabilities_container_is_not_admin(
     ) as sandbox:
         name = sandbox["sandbox_name"]
         reference = _start_probe_container(
-            single_card, container_image, annotation=name,
+            single_card, driver_probe_image, annotation=name,
             extra_flags=["--cap-add=ALL"],
         )
+        row = _wait_row(_container_pid(reference), reference=reference)
         caps, bounding = _init_process_caps(_container_pid(reference))
         assert (
             caps & (1 << _CAP_AUDIT_READ_BIT) == 0
@@ -601,7 +769,6 @@ def test_full_capabilities_container_is_not_admin(
             f"在 exec 子命令上单独剪 —— 装的 neu-box-runtime 是旧版？"
         )
 
-        row = _wait_row(_container_pid(reference))
         assert row['dev_num'] == 1, (
             f"沙盒 {name} 只持有卡 {device}，但这个 --cap-add=ALL 容器的 UDA 表里有 "
            f"{row['dev_num']} 张（udevid={row['udevids']}）—— 剪掉 CAP_AUDIT_READ "
@@ -610,7 +777,7 @@ def test_full_capabilities_container_is_not_admin(
 
 
 def test_exec_process_borrows_the_same_authorization(
-        driver_isolation, single_card, container_image):
+        driver_isolation, single_card, driver_probe_image):
     """71 · `docker exec` 起的进程：借的还是这个沙盒那一份授权，多一张都不给。
 
     容器里只有 exec 这一条路不重跑 OCI hook —— 它复用的是 create 时登记好的
@@ -629,8 +796,8 @@ def test_exec_process_borrows_the_same_authorization(
     ) as sandbox:
         name = sandbox["sandbox_name"]
         reference = _start_probe_container(
-            single_card, container_image, annotation=name)
-        _wait_row(_container_pid(reference))
+            single_card, driver_probe_image, annotation=name)
+        _wait_row(_container_pid(reference), reference=reference)
 
         # 探测放在子 shell 里、只看退出码：非交互 sh 遇到重定向失败会直接退出
         # 整个脚本（和 container_probe_command 同一套判据）。
@@ -666,7 +833,7 @@ def test_exec_process_borrows_the_same_authorization(
 
 
 def test_release_reaps_container_and_driver_table(
-        driver_isolation, single_card, container_image):
+        driver_isolation, single_card, driver_probe_image):
     """72 · release 之后：容器停着（不删）、驱动那张按 mnt ns 缓存的表回收、卡干净地交给下一家。
 
     驱动的 UDA 表是隔离的第二道门，它按 mnt ns 缓存、**不复核**我们的委托表：
@@ -685,9 +852,9 @@ def test_release_reaps_container_and_driver_table(
     ) as sandbox:
         name = sandbox["sandbox_name"]
         reference = _start_probe_container(
-            single_card, container_image, annotation=name)
+            single_card, driver_probe_image, annotation=name)
         init_pid = _container_pid(reference)
-        row = _wait_row(init_pid)
+        row = _wait_row(init_pid, reference=reference)
         assert row['dev_num'] == 1 and row['udevids'] == [device], row
 
         released = single_card.client.release(
@@ -710,8 +877,8 @@ def test_release_reaps_container_and_driver_table(
         single_card.acquire_payload(second_terminal.pid, device_ids=[device]),
     ) as sandbox:
         other = _start_probe_container(
-            single_card, container_image, annotation=sandbox["sandbox_name"])
-        row = _wait_row(_container_pid(other))
+            single_card, driver_probe_image, annotation=sandbox["sandbox_name"])
+        row = _wait_row(_container_pid(other), reference=other)
         assert row['dev_num'] == 1 and row['udevids'] == [device], (
             f"卡 {device} 交给新沙盒 {sandbox['sandbox_name']} 后，容器的 UDA 表是 "
             f"{row} —— 期望只有这一张（drv 里按 mnt ns 缓存的表/占用没有清干净？）"

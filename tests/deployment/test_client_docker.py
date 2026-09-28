@@ -32,6 +32,7 @@ import re
 import secrets
 import shlex
 import subprocess
+import time
 
 import pytest
 
@@ -115,6 +116,31 @@ def _assert_open(single_card, reference: str, node: str, *, expect_ok: bool,
         )
 
 
+def _assert_sandbox_holds_device(single_card, sandbox: str, device: int) -> None:
+    """只观察本用例借出的卡，避免其他卡的外部占用扰动全局空闲总数。"""
+    record = single_card.find_sandbox(sandbox)
+    assert record is not None, f"容器 stop 后沙盒 {sandbox} 不见了"
+    held = {int(str(item).rsplit(":", 1)[-1]) for item in record["devices"]}
+    assert device in held, f"沙盒 {sandbox} 不再持有卡 {device}：{record}"
+    assert device not in single_card.idle_minors(), (
+        f"沙盒 {sandbox} 仍持有卡 {device}，但 /status 把它报为空闲"
+    )
+
+
+def _wait_device_idle(single_card, device: int, timeout: float = 60.0) -> None:
+    """等待本用例借出的卡回池；其他卡可能被外部程序临时占用。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if device in single_card.idle_minors():
+            return
+        time.sleep(single_card.poll)
+    pytest.fail(
+        f"沙盒释放后卡 {device} 仍未回池："
+        f"dev_status={single_card.status().get('dev_status')}",
+        pytrace=False,
+    )
+
+
 def _start_expecting_refused(single_card, reference: str, sandbox: str) -> None:
     """沙盒已释放的受管容器：原生 start 不能在无授权状态运行。"""
     started = single_card.docker("start", reference, timeout=90)
@@ -134,7 +160,6 @@ def _stage_stopped_released_container(single_card, neubox_bin, container_image,
     这是那条经典路径的中段，73/74/75 三条用例共用，每一步都断言 —— 否则后面
     的失败信息会指到错误的环节上。
     """
-    baseline = single_card.idle_devices()
     name = f"neu-box-client-{secrets.token_hex(4)}"
     rc, output, sandbox = _docker_run_in_sandbox(
         single_card, neubox_bin, device,
@@ -159,15 +184,12 @@ def _stage_stopped_released_container(single_card, neubox_bin, container_image,
     stopped = single_card.docker("stop", "-t", "2", name, timeout=90)
     assert stopped.returncode == 0, (stopped.stdout or "")[:500]
     single_card.wait_container_unregistered(container_id)
-    assert single_card.idle_devices() == baseline - 1, (
-        f"容器停了之后卡就回池了（{single_card.idle_devices()} != {baseline - 1}），"
-        f"但沙盒 {sandbox} 还持有它"
-    )
+    _assert_sandbox_holds_device(single_card, sandbox, device)
 
     # ② release：沙盒销毁、卡回池；容器**留着**（停着）。
     neubox_cli(neubox_bin, "release", sandbox)
     single_card.wait_sandbox_gone(sandbox)
-    single_card.wait_idle_at_least(baseline)
+    _wait_device_idle(single_card, device)
     single_card.wait_container_stopped(name)
     return sandbox, name, container_id
 
@@ -255,7 +277,6 @@ def test_client_docker_run_container_sees_only_reserved_card(
 def test_client_release_stops_client_started_container(
         neubox_bin, single_card, container_image):
     """70 · `neubox release` 把 client 起的容器一并停掉（授权撤销、容器保留）。"""
-    baseline = single_card.idle_devices()
     device = single_card.require_idle(1)[0]
     name = f"neu-box-client-{secrets.token_hex(4)}"
 
@@ -272,7 +293,7 @@ def test_client_release_stops_client_started_container(
     neubox_cli(neubox_bin, "release", sandbox)
     single_card.wait_sandbox_gone(sandbox)
     single_card.wait_container_stopped(name)
-    single_card.wait_idle_at_least(baseline)
+    _wait_device_idle(single_card, device)
 
 
 def test_client_container_stop_then_start_uses_card_again(
@@ -283,7 +304,6 @@ def test_client_container_stop_then_start_uses_card_again(
     自己还占着卡；start 重走整条 create → runtime hook → 重新登记到同一个沙盒
     （新的 mnt ns），容器里的 NPU 照旧能用。
     """
-    baseline = single_card.idle_devices()
     device = single_card.require_idle(1)[0]
     node = single_card.device_node(device)
     name = f"neu-box-client-{secrets.token_hex(4)}"
@@ -303,9 +323,7 @@ def test_client_container_stop_then_start_uses_card_again(
     stopped = single_card.docker("stop", "-t", "2", name, timeout=90)
     assert stopped.returncode == 0, (stopped.stdout or "")[:500]
     single_card.wait_container_unregistered(container_id)
-    assert single_card.idle_devices() == baseline - 1, (
-        "注销登记不该把沙盒占着的卡放回空闲池"
-    )
+    _assert_sandbox_holds_device(single_card, sandbox, device)
 
     started = single_card.docker("start", name, timeout=90)
     assert started.returncode == 0, (
@@ -322,7 +340,7 @@ def test_client_container_stop_then_start_uses_card_again(
 
     neubox_cli(neubox_bin, "release", sandbox)
     single_card.wait_sandbox_gone(sandbox)
-    single_card.wait_idle_at_least(baseline)
+    _wait_device_idle(single_card, device)
 
 
 def test_client_release_then_native_start_is_rejected(
@@ -333,7 +351,6 @@ def test_client_release_then_native_start_is_rejected(
     docker run` 起的容器没有 label，所以它会活过 release；再 start 时 hook 拿到
     "没有这个沙盒" → 拒绝启动。
     """
-    baseline = single_card.idle_devices()
     device = single_card.require_idle(1)[0]
     node = single_card.device_node(device)
 
@@ -343,8 +360,7 @@ def test_client_release_then_native_start_is_rejected(
     # 容器还在（只是停着）—— 这是"不删容器"的直接回归：可写层没丢。
     _start_expecting_refused(single_card, name, sandbox)
     # 卡已经回池，失败的启动不能把它重新占回去。
-    single_card.wait_idle_at_least(baseline)
-    assert device in single_card.idle_minors(), single_card.idle_minors()
+    _wait_device_idle(single_card, device)
 
     single_card.remove_container(name)
 
@@ -356,7 +372,6 @@ def test_client_released_card_goes_to_next_sandbox(
     接 74 的现场：同一张卡用真 neubox 重新 acquire，新容器能开这张卡；老容器
     start 被拒绝，不会抢走卡。
     """
-    baseline = single_card.idle_devices()
     device = single_card.require_idle(1)[0]
     node = single_card.device_node(device)
 
@@ -386,7 +401,7 @@ def test_client_released_card_goes_to_next_sandbox(
 
     neubox_cli(neubox_bin, "release", new_sandbox)
     single_card.wait_sandbox_gone(new_sandbox)
-    single_card.wait_idle_at_least(baseline)
+    _wait_device_idle(single_card, device)
     single_card.remove_container(new_name)
     single_card.remove_container(old_name)
 
@@ -400,7 +415,6 @@ def test_client_docker_start_lends_the_current_sandbox(
     `neubox docker start`，借条被 hook 认领，容器绑到**现在的**沙盒上 —— 容器还是
     原来那个（ID 不变、可写层还在、annotation 一个字没改）。
     """
-    baseline = single_card.idle_devices()
     device = single_card.require_idle(1)[0]
     node = single_card.device_node(device)
     name = f"neu-box-client-{secrets.token_hex(4)}"
@@ -423,7 +437,7 @@ def test_client_docker_start_lends_the_current_sandbox(
     single_card.wait_container_unregistered(container_id)
     neubox_cli(neubox_bin, "release", sandbox_a)
     single_card.wait_sandbox_gone(sandbox_a)
-    single_card.wait_idle_at_least(baseline)
+    _wait_device_idle(single_card, device)
     single_card.wait_container_stopped(name)
 
     annotation = single_card.docker(
@@ -459,7 +473,7 @@ def test_client_docker_start_lends_the_current_sandbox(
     neubox_cli(neubox_bin, "release", sandbox_b)
     single_card.wait_sandbox_gone(sandbox_b)
     single_card.wait_container_stopped(name)
-    single_card.wait_idle_at_least(baseline)
+    _wait_device_idle(single_card, device)
     single_card.remove_container(name)
 
 
@@ -475,7 +489,6 @@ def test_client_docker_start_without_a_sandbox_is_rejected(
             pytrace=False,
         )
 
-    baseline = single_card.idle_devices()
     device = single_card.require_idle(1)[0]
     node = single_card.device_node(device)
 
@@ -503,33 +516,37 @@ def test_client_docker_start_without_a_sandbox_is_rejected(
         f"命令行应说明借卡失败：\n{output[:1000]}"
     )
 
-    single_card.wait_idle_at_least(baseline)
+    _wait_device_idle(single_card, device)
     single_card.remove_container(name)
 
 
 def test_client_docker_status_and_restart_rebind_running_container(
-        neubox_bin, single_card, container_image):
-    """真 Docker + Worker：status 看当前授权，restart 换沙盒后设备权限随之变化。"""
-    baseline = single_card.idle_devices()
-    device = single_card.require_idle(1)[0]
-    node = single_card.device_node(device)
+        neubox_bin, multi_card, container_image):
+    """真 Docker + Worker：运行中 restart 换绑沙盒，设备权限随之变化。"""
+    device_a, device_b = multi_card.require_idle(2)
+    node_a = multi_card.device_node(device_a)
+    node_b = multi_card.device_node(device_b)
     name = f"neu-box-client-{secrets.token_hex(4)}"
 
+    # 两张设备节点都预先映射进容器，后面的拒绝必须由沙盒授权决定。
     rc, output, sandbox_a = _docker_run_in_sandbox(
-        single_card, neubox_bin, device,
-        _docker_run_args(name, node, container_image, "sleep 600"),
+        multi_card, neubox_bin, device_a,
+        ["-d", "--name", name, "--device", node_a, "--device", node_b,
+         "--entrypoint", "sh", container_image, "-c", "sleep 600"],
         container_name=name,
     )
     assert rc == 0, f"`neubox docker run` 失败（rc={rc}）：\n{output[:2000]}"
-    container_id = single_card.container_id_of(name)
-    assert single_card.wait_container_registered(container_id) == sandbox_a
+    container_id = multi_card.container_id_of(name)
+    assert multi_card.wait_container_registered(container_id) == sandbox_a
     status_a = neubox_cli(neubox_bin, "docker", "status", name)
     fields_a = _fields(status_a)
     assert fields_a.get("sandbox") == sandbox_a and fields_a.get("managed") == "yes", (
         f"运行中容器的 status 没报告原沙盒：\n{status_a}"
     )
-    _assert_open(single_card, name, node, expect_ok=True,
-                 context="首次启动后应能打开自己的卡")
+    _assert_open(multi_card, name, node_a, expect_ok=True,
+                 context=f"沙盒 {sandbox_a} 应能打开卡 {device_a}")
+    _assert_open(multi_card, name, node_b, expect_ok=False,
+                 context=f"沙盒 {sandbox_a} 不应打开卡 {device_b}")
 
     # exec 只复用既有授权；neubox 的同名子命令必须明确拒绝，不能悄悄透传。
     rejected = subprocess.run(
@@ -540,34 +557,11 @@ def test_client_docker_status_and_restart_rebind_running_container(
         f"neubox docker exec 没有拒绝：rc={rejected.returncode} "
         f"stderr={rejected.stderr[:500]}"
     )
-    assert single_card.sandbox_of_container(container_id).json().get(
+    assert multi_card.sandbox_of_container(container_id).json().get(
         "sandbox_name") == sandbox_a, "拒绝 exec 后容器授权发生了变化"
 
-    stopped = single_card.docker("stop", "-t", "2", name, timeout=90)
-    assert stopped.returncode == 0, (stopped.stdout or "")[:500]
-    single_card.wait_container_unregistered(container_id)
-    stopped_status = neubox_cli(neubox_bin, "docker", "status", name)
-    stopped_fields = _fields(stopped_status)
-    assert stopped_fields.get("container_state") == "exited" and stopped_fields.get("sandbox") == "none", (
-        f"已停止容器不该报告当前授权：\n{stopped_status}"
-    )
-    neubox_cli(neubox_bin, "release", sandbox_a)
-    single_card.wait_sandbox_gone(sandbox_a)
-    single_card.created_sandboxes.remove(sandbox_a)
-    single_card.wait_idle_at_least(baseline)
-
-    # 原生 start 不存借条，容器可以运行但没有卡；此时 restart 才有意义。
-    started = single_card.docker("start", name, timeout=90)
-    assert started.returncode == 0, (started.stdout or "")[:500]
-    _assert_open(single_card, name, node, expect_ok=False,
-                 context="原生 docker start 不应产生借卡授权")
-    unbound_status = neubox_cli(neubox_bin, "docker", "status", name)
-    unbound_fields = _fields(unbound_status)
-    assert unbound_fields.get("container_state") == "running" and unbound_fields.get("sandbox") == "none", (
-        f"运行但无卡的容器状态不对：\n{unbound_status}"
-    )
-
-    shell_b, sandbox_b = _shell_with_card(single_card, neubox_bin, device)
+    # A 尚在运行，B 借另一张卡；restart 必须对运行中容器执行 stop → 借条 → start。
+    shell_b, sandbox_b = _shell_with_card(multi_card, neubox_bin, device_b)
     assert sandbox_b != sandbox_a
     rc, output = shell_b.run(" ".join(
         shlex.quote(str(item))
@@ -576,17 +570,37 @@ def test_client_docker_status_and_restart_rebind_running_container(
     assert rc == 0, (
         f"沙盒 {sandbox_b} 里的 `neubox docker restart` 失败（rc={rc}）：\n{output[:2000]}"
     )
-    assert single_card.container_id_of(name) == container_id, "restart 不应换容器 ID"
-    assert single_card.wait_container_registered(container_id) == sandbox_b
+    assert multi_card.container_id_of(name) == container_id, "restart 不应换容器 ID"
+    assert multi_card.wait_container_registered(container_id) == sandbox_b
     rebound_status = neubox_cli(neubox_bin, "docker", "status", name)
-    assert _fields(rebound_status).get("sandbox") == sandbox_b, (
+    rebound_fields = _fields(rebound_status)
+    assert rebound_fields.get("container_state") == "running" and rebound_fields.get("sandbox") == sandbox_b, (
         f"restart 后 status 没报告新沙盒：\n{rebound_status}"
     )
-    _assert_open(single_card, name, node, expect_ok=True,
-                 context="restart 借新沙盒后应重新获得设备授权")
+    _assert_open(multi_card, name, node_a, expect_ok=False,
+                 context=f"restart 换到沙盒 {sandbox_b} 后旧卡 {device_a} 应被拒绝")
+    _assert_open(multi_card, name, node_b, expect_ok=True,
+                 context=f"restart 换到沙盒 {sandbox_b} 后新卡 {device_b} 应可用")
+
+    # 旧沙盒释放不能误停已经换绑到 B 的容器。
+    neubox_cli(neubox_bin, "release", sandbox_a)
+    multi_card.wait_sandbox_gone(sandbox_a)
+    multi_card.created_sandboxes.remove(sandbox_a)
+    _wait_device_idle(multi_card, device_a)
+    _assert_open(multi_card, name, node_b, expect_ok=True,
+                 context="释放旧沙盒后新沙盒的授权应保留")
+
+    stopped = multi_card.docker("stop", "-t", "2", name, timeout=90)
+    assert stopped.returncode == 0, (stopped.stdout or "")[:500]
+    multi_card.wait_container_unregistered(container_id)
+    stopped_status = neubox_cli(neubox_bin, "docker", "status", name)
+    stopped_fields = _fields(stopped_status)
+    assert stopped_fields.get("container_state") == "exited" and stopped_fields.get("sandbox") == "none", (
+        f"已停止容器不该报告当前授权：\n{stopped_status}"
+    )
+    _assert_sandbox_holds_device(multi_card, sandbox_b, device_b)
 
     neubox_cli(neubox_bin, "release", sandbox_b)
-    single_card.wait_sandbox_gone(sandbox_b)
-    single_card.created_sandboxes.remove(sandbox_b)
-    single_card.wait_container_stopped(name)
-    single_card.wait_idle_at_least(baseline)
+    multi_card.wait_sandbox_gone(sandbox_b)
+    multi_card.created_sandboxes.remove(sandbox_b)
+    _wait_device_idle(multi_card, device_b)

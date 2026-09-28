@@ -197,7 +197,12 @@ def test_client_acquire_sigint_cancels_queued_acquire(neubox_bin, single_card):
         f"Ctrl-C 之后应当以 130 退出（128+SIGINT），实际 {process.returncode}；"
         f"输出：\n{out[:1000]}"
     )
-    assert "取消" in out, f"输出里没有取消提示：\n{out[:1000]}"
+    assert re.search(r"(?m)^result:[ \t]+cancelled[ \t]*$", out), (
+        f"输出里没有结构化的取消结果：\n{out[:1000]}"
+    )
+    assert re.search(r"(?m)^kind:[ \t]+acquire[ \t]*$", out), (
+        f"取消结果没有标明 acquire 类型：\n{out[:1000]}"
+    )
 
     entry = single_card.queue_item(request_id, kind="acquire")
     assert entry is not None and entry["status"] == "cancelled", (

@@ -153,6 +153,11 @@ async def _execute_in_sandbox(
         environment = {**os.environ, **(target.get('env') or {}), 'PYTHONUNBUFFERED': '1'}
         if username:
             environment['HOME'] = target_dir
+            # The Worker normally runs as root. A task may run as another
+            # user, but inherited USER/LOGNAME would still name root; neubox
+            # uses NEU_BOX_USER (then USER) for start-intent ownership checks.
+            environment.update(USER=username, LOGNAME=username,
+                               NEU_BOX_USER=username)
         # The gate shell must not source a caller-controlled BASH_ENV before
         # it has joined the sandbox.  The actual command runs in the inner
         # bash after the parent explicitly opens the gate.

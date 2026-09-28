@@ -180,6 +180,22 @@ def test_script_executes_heredoc_in_user_bash_environment(monkeypatch, tmp_path)
     )
 
 
+def test_script_uses_task_identity_for_neubox_commands(monkeypatch, tmp_path):
+    """A worker's inherited login name must not make docker start lend as root."""
+    monkeypatch.setenv('USER', 'wrong-worker-user')
+    monkeypatch.setenv('LOGNAME', 'wrong-worker-user')
+    monkeypatch.setenv('NEU_BOX_USER', 'wrong-worker-user')
+    outcome = _run_host(
+        monkeypatch, tmp_path,
+        "printf 'identity=%s,%s,%s\\n' \"$USER\" \"$LOGNAME\" \"$NEU_BOX_USER\"\n",
+        mode='script',
+    )
+
+    assert outcome['returncode'] == 0, outcome
+    expected = _current_user()
+    assert f'identity={expected},{expected},{expected}' in outcome['stdout']
+
+
 def test_argv_exec_does_not_reparse_shell_metacharacters(monkeypatch, tmp_path):
     argv = [
         sys.executable, '-c',

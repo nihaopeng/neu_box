@@ -81,7 +81,9 @@ sudoedit /etc/docker/daemon.json  # 容器场景：手动设置 default-runtime 
 docker ps
 sudo systemctl restart docker
 curl -fsS http://127.0.0.1:59075/healthz
-sudo neuboxctl test            # 维护窗口内：真实任务与设备的实机验收
+# 维护窗口内：将示例镜像名换成本机已有的普通镜像和 Ascend 驱动探针镜像
+sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag neuboxctl test
 ```
 
 `neuboxctl setup` 生成或迁移 runtime 配置，迁移并检查数据库，以暂停状态启动
@@ -97,9 +99,12 @@ Worker 默认监听 `0.0.0.0:59075`，运维入口是 `/usr/sbin/neuboxctl`；
 `/usr/libexec/neu-box/tests/`，是一个自带 pytest 的 PyInstaller 产物（部署机不需要
 Python），打真实 HTTP API、真实任务、真实设备、真实容器，最后几条用例还会按维护
 流程停/起 Worker（给 MainPID 发 SIGTERM、再用 `setup` 拉起）。
-它**不跳过**：缺任何前置（Worker 不通、没有空闲卡、卡数不够、dockerd 不在、
-`default-runtime` 没配成 `neu-box-runtime`）都会失败并说明缺什么。要在维护窗口、
-以 root 运行，参数见 `neuboxctl test --help`。详见
+它包含 CLI `submit --script` 工作流和 Ascend UDA 隔离用例。普通容器镜像可用
+本机已有的 Alpine；UDA 用例需要另行指定本机已有、包含
+`torch_npu` 与兼容 CANN 用户态的镜像。它**不跳过**：缺任何前置（Worker 不通、
+没有空闲卡、卡数不够、dockerd 不在、镜像不在本机、`default-runtime` 没配成
+`neu-box-runtime`）都会失败并说明缺什么。要在维护窗口、以 root 运行，参数见
+`neuboxctl test --help`。详见
 [部署与升级手册](docs/deployment.md#api-与实机验收)。
 
 ### 日常管理
@@ -233,10 +238,10 @@ Clang、`pkg-config`、libbpf 1.0+ 开发包，以及提供 `readelf` 的
 binutils，详见
 [部署与升级手册](docs/deployment.md#构建-rpm)。
 
-实机验收套件在 `tests/deployment/`：pytest 写的，按 manifest 分成七个组各一个文件
-（基本盘 / 单卡 / 多卡 / 调度 / 容器 / 收尸 / 停机维护），执行顺序就按这个顺序
-—— 不碰卡的在前，会停/起 Worker 的维护组独占最后。每组一个 session fixture 查
-该组前置，缺什么就 fail 并写清缺的是什么（**不跳过**）。它被打成 PyInstaller onedir 产物随 RPM
+实机验收套件在 `tests/deployment/`：pytest 写的，覆盖
+基本盘、单卡、多卡、调度、容器、client、脚本提交、驱动 UDA 隔离、收尸和停机
+维护。执行顺序是不碰卡的在前，会停/起 Worker 的维护组独占最后。各组使用 fixture
+检查前置条件；缺失时直接失败并说明原因（**不跳过**）。它被打成 PyInstaller onedir 产物随 RPM
 安装到 `/usr/libexec/neu-box/tests/`，对已部署的 Worker 用
 `neuboxctl test` 运行。它会创建真实任务、占用设备、起真实容器，还会重启
 Worker，应在维护窗口以 root 执行。

@@ -14,13 +14,15 @@ docker ps
 sudo systemctl restart docker
 docker info --format '{{.DefaultRuntime}}'  # 应为 neu-box-runtime
 curl -fsS http://127.0.0.1:59075/healthz
-sudo neuboxctl test               # 部署后真机测试
+sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag neuboxctl test
 
 # 升级：先 pause，再装同一个包、迁移配置、setup、验收
 sudo neuboxctl pause
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudo neuboxctl setup
-sudo neuboxctl test
+sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag neuboxctl test
 ```
 
 `pause` 是升级前必须执行的停服路径：排空任务和沙盒、备份数据库和配置、清理旧 BPF pins 后停止 Worker；`setup` 是唯一启动路径：迁移旧配置和 SQLite schema，加载新版 BPF，`/healthz` 通过后恢复调度。启动和停止统一走 `neuboxctl setup` / `pause`，只读观察使用 `systemctl status`、`journalctl`；等待超时可用 `--timeout <秒>` 调整。
@@ -52,7 +54,26 @@ runtime 配置备份以 `.runtime.env` 结尾。
 Docker 配置没有变化，无需为替换 runtime 二进制而重启 dockerd；若改了配置，仍需
 安排手动重启。
 
-部署后验收必须在维护窗口以 root 执行，会使用真实 API、任务、设备和容器。
+## API 与实机验收
+
+`neuboxctl test` 会访问真实 API、运行任务、占用设备、
+启动容器，最后的维护用例还会停/起 Worker。必须在维护窗口以 root 执行。
+套件不自动拉取镜像；缺少必需镜像或设备时会失败，不会跳过。
+
+普通容器用例使用 `NEU_BOX_CONTAINER_IMAGE` 指定本机已有、带 `/bin/sh` 的镜像，
+例如 `alpine:3.20`。Ascend UDA 隔离用例另需
+`NEU_BOX_DRIVER_PROBE_IMAGE`：镜像必须已在本机，并包含 Python、`torch_npu` 和
+与宿主驱动兼容的 CANN 用户态。Alpine 不能充当驱动探针镜像。
+
+```bash
+docker image inspect alpine:3.20 your-ascend-image:tag
+sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag neuboxctl test
+```
+
+将镜像名换成该节点实际安装的名称。套件还覆盖 CLI 的
+`neubox submit --script` 文件快照、stdin 脚本退出码，以及脚本中执行
+`neubox docker run --rm` 后的容器和设备清理。
 
 ## 部署依赖
 
