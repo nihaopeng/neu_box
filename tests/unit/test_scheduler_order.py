@@ -186,6 +186,8 @@ def test_queue_position_is_priority_then_rank_across_tasks_and_acquires():
     assert queue.priority_rank('low-a') == {'priority': 0, 'rank': 1}
     assert queue.priority_rank('low-b') == {'priority': 0, 'rank': 2}
     assert queue.priority_rank('missing') is None
+    assert queue._dequeue('task', 'low-a') is True
+    assert queue.priority_rank('low-b') == {'priority': 0, 'rank': 1}
 
 
 def test_consume_loop_lets_spawned_coroutines_run():

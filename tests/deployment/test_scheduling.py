@@ -1,8 +1,8 @@
 """第 3 层 · 调度（manifest 52-53、56-57、76-80）。
 
 这一组验的是"卡什么时候发出去"，而不是卡本身：优先级只分两档（0 普通 /
-1 赶论文），同一档内按提交顺序；每轮调度扫一遍队列，**取第一个能分配的任务**
-—— 队首要的卡没空，不能把后面本来跑得动的任务一起挡住。调度顺序的纯逻辑在
+1 赶论文），同一档内按提交顺序；高优先级等待设备时保留所需的卡，其他空闲卡
+仍可分给普通任务。调度顺序的纯逻辑在
 ``tests/unit/test_scheduler_order.py`` 里逐条覆盖，这里验的是同一套语义在真
 Worker + 真卡上的表现。
 """
@@ -237,9 +237,8 @@ def test_queue_positions_stay_contiguous_after_cancel(single_card):
     `position` 是调度器每轮重算后写进统一视图的（master 就靠它显示队列）。
     取消/释放之后留下空洞或重复，界面上看到的队列就是错的。
     """
-    baseline = single_card.idle_devices()
     device = single_card.idle_minors()[0]
-    blocker = single_card.submit("sleep 10", device_ids=[device])
+    blocker = single_card.submit("sleep 120", device_ids=[device])
     single_card.wait_task_running(blocker)
 
     terminal = single_card.spawn_terminal()
@@ -251,37 +250,48 @@ def test_queue_positions_stay_contiguous_after_cancel(single_card):
 
     task_id = single_card.submit("printf 'queued\\n'", device_ids=[device])
 
-    def queued_entries() -> list[tuple]:
-        return [
-            (entry.get("kind"), entry.get("id"), entry.get("position"),
-             entry.get("queue_position"))
-            for entry in single_card.queue()
-            if entry.get("status") == "queued"
+    def waiting_entries() -> list[dict]:
+        # 统一列表包含其他用户的请求；还需纳入 allocating 会话，才能校验
+        # position 是否在整条等待队列中连续。
+        entries = [
+            entry for entry in single_card.queue()
+            if entry.get("status") in {"queued", "allocating"}
         ]
+        assert [entry.get("position") for entry in entries] == list(
+            range(1, len(entries) + 1)
+        ), entries
+        ranks: dict[int, int] = {}
+        for entry in entries:
+            priority = entry.get("priority", 0)
+            ranks[priority] = ranks.get(priority, 0) + 1
+            assert entry.get("queue_position") == {
+                "priority": priority, "rank": ranks[priority],
+            }, entry
+        return entries
 
-    before = queued_entries()
-    assert [item[1] for item in before] == [request_id, task_id], before
-    positions = [item[2] for item in before]
-    assert positions == list(range(positions[0], positions[0] + len(positions))), (
-        f"排队条目的 position 不连续: {before}"
-    )
-    assert before[0][3]["priority"] == before[1][3]["priority"] == 0, before
-    assert before[1][3]["rank"] == before[0][3]["rank"] + 1, before
+    before = waiting_entries()
+    before_ids = [entry["id"] for entry in before]
+    assert request_id in before_ids and task_id in before_ids, before
+    assert before_ids.index(request_id) < before_ids.index(task_id), before
 
     cancelled = single_card.client.cancel_entry(request_id, kind="acquire")
     assert cancelled.status == 200, cancelled.text
 
-    after = queued_entries()
-    assert [item[1] for item in after] == [task_id], after
-    assert after[0][2] == positions[0], (
-        f"取消之后后面那条没有顶上前一个位置（留下空洞）: 前={before} 后={after}"
-    )
-    assert after[0][3] == before[0][3], (before, after)
+    after = waiting_entries()
+    after_ids = [entry["id"] for entry in after]
+    assert request_id not in after_ids and task_id in after_ids, (before, after)
+    common = set(before_ids) & set(after_ids)
+    assert [entry_id for entry_id in before_ids if entry_id in common] == [
+        entry_id for entry_id in after_ids if entry_id in common
+    ], (before, after)
+
+    # 本用例只验证队列位置；先取消自己的待执行任务，避免等待别人的请求。
+    cancelled_task = single_card.client.delete_tasks([task_id])
+    assert cancelled_task.status == 200, cancelled_task.text
+    assert single_card.wait_task(task_id)["status"] == "cancelled"
 
     single_card.client.delete_tasks([blocker])
     single_card.wait_task(blocker)
-    assert single_card.wait_task(task_id)["status"] == "completed"
-    single_card.wait_idle_at_least(baseline)
 
 
 def test_many_equal_priority_tasks_keep_submission_order(single_card):
