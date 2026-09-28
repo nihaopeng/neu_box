@@ -215,7 +215,7 @@ func TestDockerExecExplainsWhyItDoesNotRunDocker(t *testing.T) {
 	if code := application.run([]string{"docker", "exec", "train"}); code != 2 {
 		t.Fatalf("exit=%d", code)
 	}
-	for _, want := range []string{"docker exec", "docker status", "docker help"} {
+	for _, want := range []string{"docker exec", "docker status", "neubox help verbose"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Fatalf("missing %q in %s", want, errOut.String())
 		}

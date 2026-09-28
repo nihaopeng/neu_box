@@ -187,8 +187,8 @@ func TestDockerRejectsUnsupportedSubcommands(t *testing.T) {
 		if call.argv != nil {
 			t.Fatalf("%v: 不该 exec docker", args)
 		}
-		if !strings.Contains(errOut.String(), "docker help") && !strings.Contains(errOut.String(), "docker run") {
-			t.Fatalf("%v: 错误信息应指出 docker help: %s", args, errOut.String())
+		if !strings.Contains(errOut.String(), "neubox help") && !strings.Contains(errOut.String(), "docker run") {
+			t.Fatalf("%v: 错误信息应指出 help: %s", args, errOut.String())
 		}
 	}
 }

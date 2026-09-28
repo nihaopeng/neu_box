@@ -37,9 +37,13 @@ func TestHelpUsesReadableIndentation(t *testing.T) {
 	for _, expected := range []string{
 		"\n    neubox shell",
 		"\n    neubox acquire",
+		"neubox submit --wait --device-num 2 -- neubox docker run --rm",
+		"neubox submit --wait --device-num 2 -- neubox docker start train-1 -a",
+		"neubox submit --wait --device-num 2 --script - <<'SH'\nset -e\n",
+		"\ndocker exec dev python /workspace/train.py\nSH\n",
 		"\n    neubox docker restart",
 		"\n    neubox docker status",
-		"\n    neubox help verbose",
+		"neubox help verbose",
 	} {
 		if !strings.Contains(out.String(), expected) {
 			t.Fatalf("missing %q in help:\n%s", expected, out.String())
@@ -52,9 +56,37 @@ func TestHelpUsesReadableIndentation(t *testing.T) {
 	if code := application.run([]string{"help", "verbose"}); code != 0 {
 		t.Fatalf("verbose exit=%d", code)
 	}
-	for _, expected := range []string{"priority 1", "NEU_BOX_URL", "neubox docker help verbose"} {
+	for _, expected := range []string{"priority 1", "NEU_BOX_URL", "任务不会自动接管运行中容器", "完整示例: neubox help"} {
 		if !strings.Contains(out.String(), expected) {
 			t.Fatalf("详细帮助缺少 %q: %s", expected, out.String())
+		}
+	}
+}
+
+func TestDockerHelpUsesUnifiedHelp(t *testing.T) {
+	application, out, errOut := testApplication("http://127.0.0.1:1")
+	if code := application.run([]string{"help"}); code != 0 {
+		t.Fatalf("help exit=%d", code)
+	}
+	mainHelp := out.String()
+	for _, args := range [][]string{{"docker", "help"}, {"help", "docker"}, {"docker", "--help"}} {
+		out.Reset()
+		if code := application.run(args); code != 0 || errOut.Len() != 0 {
+			t.Fatalf("%v: exit=%d stderr=%s", args, code, errOut.String())
+		}
+		if out.String() != mainHelp {
+			t.Fatalf("%v: Docker help 与主 help 不一致", args)
+		}
+	}
+	out.Reset()
+	if code := application.run([]string{"help", "verbose"}); code != 0 {
+		t.Fatalf("verbose exit=%d", code)
+	}
+	verboseHelp := out.String()
+	for _, args := range [][]string{{"docker", "help", "verbose"}, {"help", "docker", "verbose"}} {
+		out.Reset()
+		if code := application.run(args); code != 0 || out.String() != verboseHelp {
+			t.Fatalf("%v: Docker verbose 与主 verbose 不一致", args)
 		}
 	}
 }

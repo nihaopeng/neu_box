@@ -44,19 +44,19 @@ func (a *app) runDocker(args []string) int {
 	case "status":
 		return a.runDockerStatus(args[1:])
 	case "exec":
-		return a.usageError("neubox docker exec 不支持更换设备授权。请先用 neubox docker status <容器> 查看授权，再使用 docker exec <容器> <命令>；详见 neubox docker help")
+		return a.usageError("neubox docker exec 不支持更换设备授权。请先用 neubox docker status <容器> 查看授权，再使用 docker exec <容器> <命令>；详见 neubox help verbose")
 	case "help", "-h", "--help":
 		if len(args) == 2 && args[1] == "verbose" {
-			a.printVerboseDockerHelp()
+			a.printVerboseHelp()
 		} else if len(args) == 1 {
-			a.printDockerHelp()
+			a.printHelp()
 		} else {
-			return a.usageError("用法: neubox docker help [verbose]")
+			return a.usageError("用法: neubox help [verbose]")
 		}
 		return 0
 	default:
 		return a.usageError(fmt.Sprintf(
-			"不支持 neubox docker %s；详见 neubox docker help", args[0]))
+			"不支持 neubox docker %s；详见 neubox help", args[0]))
 	}
 
 	// `docker run` 之后的参数一个都不解析，原样透传（连同开头的 --）。
@@ -449,55 +449,4 @@ func (a *app) resolveOwnSandbox() (string, int) {
 		return "", 1
 	}
 	return strings.TrimSpace(*response.SandboxName), 0
-}
-
-func (a *app) printDockerHelp() {
-	fmt.Fprint(a.out, `neubox docker — 容器设备授权
-
-用法:
-    neubox docker run <docker run 参数...>
-    neubox docker start <container> [docker start 参数...]
-    neubox docker restart <container>
-    neubox docker status <container>
-
-示例:
-    neubox shell --device-num 2
-    neubox docker run --rm -it ubuntu bash
-    neubox docker start train-1 -a
-    neubox docker status train-1
-    docker exec -it train-1 bash
-
-详细帮助: neubox docker help verbose
-`)
-}
-
-func (a *app) printVerboseDockerHelp() {
-	fmt.Fprint(a.out, `neubox docker — 容器命令参考
-
-用法:
-    neubox docker run <docker run 参数...>
-    neubox docker start <container> [docker start 参数...]
-    neubox docker restart <container>
-    neubox docker status <container>
-
-命令:
-    run      在当前沙盒中创建并启动容器；Docker 参数原样传递
-    start    在当前沙盒中启动已停止的受管容器；-a 等待容器退出
-    restart  在当前沙盒中重启运行中的受管容器；现有工作会中断
-    status   查询容器运行状态及当前设备授权
-
-使用要求:
-    run、start、restart 需要先通过 neubox shell 或 neubox acquire 获取沙盒。
-    start、restart 仅适用于由 Neu Box 管理的容器。
-    运行中的容器不能通过 docker exec 更换设备授权；需要更换时使用 restart。
-    进入运行中的容器请使用 docker exec。
-
-示例:
-    neubox shell --device-num 2
-    neubox docker run --rm -it ubuntu bash
-    neubox docker start train-1 -a
-    neubox docker restart train-1
-    neubox docker status train-1
-    docker exec -it train-1 bash
-`)
 }

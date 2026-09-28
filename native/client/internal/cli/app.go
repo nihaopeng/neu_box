@@ -107,22 +107,18 @@ func (a *app) run(args []string) int {
 		return 0
 	}
 	if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
-		if args[0] == "docker" || args[0] == "dk" {
-			a.printDockerHelp()
-		} else {
-			a.printHelp()
-		}
+		a.printHelp()
 		return 0
 	}
 
 	switch args[0] {
 	case "help", "-h", "--help":
 		if len(args) == 2 && args[1] == "docker" {
-			a.printDockerHelp()
+			a.printHelp()
 			return 0
 		}
 		if len(args) == 3 && args[1] == "docker" && args[2] == "verbose" {
-			a.printVerboseDockerHelp()
+			a.printVerboseHelp()
 			return 0
 		}
 		if len(args) == 2 && args[1] == "verbose" {
@@ -130,7 +126,7 @@ func (a *app) run(args []string) int {
 			return 0
 		}
 		if len(args) != 1 {
-			return a.usageError("用法: neubox help [verbose|docker [verbose]]")
+			return a.usageError("用法: neubox help [verbose]")
 		}
 		a.printHelp()
 		return 0
