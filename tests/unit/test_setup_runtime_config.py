@@ -101,6 +101,22 @@ def test_existing_custom_values_and_comments_survive_worker_url_sync(
     assert config.stat().st_mtime_ns == before
 
 
+def test_setup_updates_former_packaged_hook_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _, hook = _runtime_paths(monkeypatch, tmp_path)
+    config = tmp_path / "runtime.env"
+    config.write_text(
+        "NEU_BOX_HOOK=/usr/local/bin/neu-box-hook # packaged path\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime_config.shutil, "which", _which())
+
+    setup.initialize_runtime_config(59075)
+
+    assert f"NEU_BOX_HOOK={hook} # packaged path\n" in config.read_text(encoding="utf-8")
+
+
 def test_existing_valid_custom_runtime_survives_discovery_on_docker_node(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

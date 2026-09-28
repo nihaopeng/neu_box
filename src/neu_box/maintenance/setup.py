@@ -25,9 +25,10 @@ from neu_box.maintenance.markers import (
 from neu_box.maintenance.runtime_config import RuntimeConfig, ensure_runtime_config
 from neu_box.maintenance.worker_config import migrate_config
 from neu_box.maintenance.docker_config import prepare_docker_config, activate_docker_config
+from neu_box.maintenance.paths import RUNTIME_BIN
 
 
-_RUNTIME_WRAPPER = Path("/usr/local/bin/neu-box-runtime")
+_RUNTIME_WRAPPER = RUNTIME_BIN
 
 
 def initialize_runtime_config(port: int, real_runc: str | None = None) -> RuntimeConfig:

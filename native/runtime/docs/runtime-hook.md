@@ -52,7 +52,7 @@ runtime 和 hook **不碰 BPF、不碰数据库**，只负责把可信的运行�
 ```json
 {
   "default-runtime": "neu-box-runtime",
-  "runtimes": { "neu-box-runtime": { "path": "/usr/local/bin/neu-box-runtime" } }
+  "runtimes": { "neu-box-runtime": { "path": "/usr/libexec/neu-box/neu-box-runtime" } }
 }
 ```
 
@@ -161,7 +161,7 @@ runc 杀掉 hook 时连错误信息都拿不到。
 | 键 | 默认值 | 说明 |
 |---|---|---|
 | `NEU_BOX_WORKER_URL` | `http://127.0.0.1:59075` | Worker 地址，hook 往这里登记 |
-| `NEU_BOX_HOOK` | `/usr/local/bin/neu-box-hook` | 注入进 config.json 的 hook 路径 |
+| `NEU_BOX_HOOK` | `/usr/libexec/neu-box/neu-box-hook` | 注入进 config.json 的 hook 路径 |
 | `NEU_BOX_HOOK_PHASE` | `createRuntime` | 注入到哪个 OCI hook 阶段（`prestart` 可切回，见下面「phase 验证记录」） |
 | `NEU_BOX_REAL_RUNC` | `/usr/local/bin/runc` | wrapper 后面真正接的 runtime |
 | `NEU_BOX_CAP_GUARD` | `drop` | 对请求全套 capability 的容器执行 `drop`、`deny` 或 `off`，详见上文「能力位守卫」 |

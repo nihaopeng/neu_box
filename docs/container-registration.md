@@ -10,7 +10,7 @@
 | 隔离为什么成立：预留表、mnt ns 委托、驱动 UDA 表三层怎么配合，release / exec / stop→start 各条路径的结论 | [`isolation.md`](isolation.md) |
 | 端点契约：请求字段、状态码、错误码、幂等语义 | [`worker-api.md`](worker-api.md)「登记容器归属（runtime hook 专用）」—— **接口以那边为准**，本文不重复字段表 |
 | runtime 侧怎么做：wrapper 怎么注入、hook 怎么读 OCI state、`daemon.json` / `runtime.env` 怎么配、装机顺序为什么是硬的 | `native/runtime/docs/runtime-hook.md` |
-| 客户端 `neu-sbox` 怎么用、annotation 是谁拼的 | `native/client/README.md` |
+| 客户端 `neubox` 怎么用、annotation 是谁拼的 | `native/client/README.md` |
 
 这是一条**跨仓库链路**：运行时的身份由 runtime 侧采集，授权判断和落库全在 Worker。
 改协议字段之前先确认三边都能跟上，单边改动等于 break。
@@ -73,7 +73,7 @@ Worker 收到的 `sandbox_cgroup` 最终来自 Docker 的
 docker-py 7.x **没有**一等参数，Worker 自己起容器时只能
 `hc = api.create_host_config(); hc["Annotations"] = {...}` 这样塞进去，这是已知的
 将就写法，别当 bug"修掉"（`src/neu_box/execution/docker.py`）。用户侧
-`docker run --annotation sandbox_cgroup=<name>` 和 `neu-sbox docker run` 由
+`docker run --annotation sandbox_cgroup=<name>` 和 `neubox docker run` 由
 goClient 提供。
 
 annotation 是**传输通道，不是凭证**。真正的校验在 Worker 侧 —— 见下面「这个入口

@@ -31,8 +31,8 @@ from deployment_support import (
     wait_container_log_count,
 )
 
-RUNTIME_BINARY = "/usr/local/bin/neu-box-runtime"
-HOOK_BINARY = "/usr/local/bin/neu-box-hook"
+RUNTIME_BINARY = "/usr/libexec/neu-box/neu-box-runtime"
+HOOK_BINARY = "/usr/libexec/neu-box/neu-box-hook"
 
 
 def _minor(device: str) -> int:

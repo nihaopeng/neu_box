@@ -57,17 +57,18 @@ uv run --frozen --group build deploy/build_release.py
 | 路径 | 权限 | 说明 |
 |---|---|---|
 | `/etc/neu-box` | 0750 root:root | `worker.env` 归包；`runtime.env` 由 `neuboxctl setup` 生成 |
-| `/usr/local/bin/neu-box-runtime` | 0755 | wrapper |
-| `/usr/local/bin/neu-box-hook` | 0755 | OCI hook |
+| `/usr/libexec/neu-box/neu-box-runtime` | 0755 | wrapper |
+| `/usr/libexec/neu-box/neu-box-hook` | 0755 | OCI hook |
 
 包里**没有** `runtime.env`：执行 `neuboxctl setup` 时生成或迁移它。
 键的说明模板安装在 `/usr/share/neu-box/runtime.env.example`。
 
-### 为什么路径写死在 /usr/local/bin
+### 私有路径与 Docker 配置
 
-这个路径是 Docker `daemon.json` 里的 path 和二进制内置默认值
-（`NEU_BOX_HOOK` / `NEU_BOX_REAL_RUNC`）共同使用的契约。改路径要同时修改
-`neuboxctl setup` 的 Docker 配置和这些默认值。
+Docker `daemon.json` 的 path 和 `NEU_BOX_HOOK` 都由 `neuboxctl setup` 指向
+RPM 内的私有二进制。升级旧包时，`setup` 同步更新曾由包安装的旧 hook 路径与
+Docker runtime 路径；手工指定的 hook 路径保留。`NEU_BOX_REAL_RUNC` 指向宿主机
+实际安装的 runc，不是 Neu Box 私有程序。
 
 ### 为什么不声明 Docker 和 runc 依赖
 
@@ -81,7 +82,7 @@ runc 和 Docker **故意不写**：装 Docker 的机器上 runc 往往是它自�
 
 ### 包脚本做了什么（很少）
 
-- `%post`：刷新 systemd unit 并提示运行 `neuboxctl setup`；不碰 daemon.json、
+- `%post`：刷新 systemd unit；`%posttrans` 在事务末尾提示运行私有路径下的 `neuboxctl setup`。脚本不碰 daemon.json、
   不生成 `runtime.env`、不重启 dockerd。
 - `%preun`：最终卸载时，如果 daemon.json 还指着 neu-box-runtime 就拒绝 `rpm -e`。
 - `%pre`：Worker 服务运行中时拒绝升级，要求先用 `neuboxctl pause`。

@@ -28,7 +28,7 @@ func TestDefaults(t *testing.T) {
 	got := Default()
 	want := Config{
 		WorkerURL: "http://127.0.0.1:59075",
-		HookPath:  "/usr/local/bin/neu-box-hook",
+		HookPath:  "/usr/libexec/neu-box/neu-box-hook",
 		HookPhase: "createRuntime",
 		RealRunc:  "/usr/local/bin/runc",
 		CapGuard:  "drop",

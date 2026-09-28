@@ -49,7 +49,7 @@ const DefaultPath = "/etc/neu-box/runtime.env"
 // 真机第一次跑就是它 —— 出问题就把 NEU_BOX_HOOK_PHASE 切回 prestart，这是退路。
 const (
 	DefaultWorkerURL = "http://127.0.0.1:59075"
-	DefaultHookPath  = "/usr/local/bin/neu-box-hook"
+	DefaultHookPath  = "/usr/libexec/neu-box/neu-box-hook"
 	DefaultHookPhase = "createRuntime"
 	DefaultRealRunc  = "/usr/local/bin/runc"
 	// DefaultCapGuard 让 wrapper 剪掉 CAP_AUDIT_READ：容器请求全套能力位

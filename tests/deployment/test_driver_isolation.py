@@ -88,7 +88,7 @@ _EXTRA_PYTHON_GLOBS = (
     "/opt/conda/bin/python",
 )
 
-# 探针曾经跑不起来的真实原因：套件是 `sudo neuboxctl test` 起的，环境是 root 的
+# 探针曾经跑不起来的真实原因：套件以 root 运行，环境是 root 的
 # 最小集，而 `import torch_npu` 需要 CANN 的 PYTHONPATH / LD_LIBRARY_PATH 和几个
 # ASCEND_* 指向（用户交互 shell 里这些由 CANN 装机脚本写进 profile，root 这边没
 # 有）。不补就是"本机没有能触发驱动建 UDA 节点的命令"这种假前置缺失 —— 真机上
@@ -478,7 +478,7 @@ def _caps_of_status(text: str, *, source: str) -> tuple[int, int]:
     return fields["CapEff"], fields["CapBnd"]
 
 
-_RUNTIME_BIN = "/usr/local/bin/neu-box-runtime"
+_RUNTIME_BIN = "/usr/libexec/neu-box/neu-box-runtime"
 _CAP_AUDIT_READ_BIT = 37
 
 _FULL_CAP_NAMES = (

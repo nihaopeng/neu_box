@@ -44,15 +44,16 @@ cp -a rootfs/. %{buildroot}/
 
 test -x %{buildroot}%{_libexecdir}/neu-box/neuboxd/neuboxd
 test -x %{buildroot}/usr/local/bin/neubox
-test -L %{buildroot}/usr/local/bin/neu-sbox
-test -x %{buildroot}/usr/local/bin/neu-box-runtime
-test -x %{buildroot}/usr/local/bin/neu-box-hook
+test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-runtime
+test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-hook
 test -x %{buildroot}%{_libexecdir}/neu-box/neuboxctl/neuboxctl
 test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-sandbox
 test -f %{buildroot}%{_libexecdir}/neu-box/device_block.o
-test -L %{buildroot}%{_sbindir}/neuboxctl
 test -x %{buildroot}%{_libexecdir}/neu-box/tests/neu-box-deployment-tests
-test -L %{buildroot}%{_sbindir}/neuboxd
+test ! -e %{buildroot}%{_sbindir}/neuboxctl
+test ! -e %{buildroot}%{_sbindir}/neuboxd
+test ! -e %{buildroot}/usr/local/bin/neu-box-runtime
+test ! -e %{buildroot}/usr/local/bin/neu-box-hook
 test -f %{buildroot}%{_unitdir}/neuboxd.service
 test -f %{buildroot}%{_sysconfdir}/neu-box/worker.env
 test -f %{buildroot}%{_datadir}/neu-box/runtime.env.example
@@ -63,7 +64,7 @@ test ! -e %{buildroot}%{_sysconfdir}/neu-box/runtime.env
 # import another bundled module after RPM has changed the files.
 if /usr/bin/systemctl is-active --quiet \
     neuboxd.service >/dev/null 2>&1; then
-    echo "neuboxd.service is active; run 'neuboxctl pause' before installing this RPM" >&2
+    echo "neuboxd.service is active; run '/usr/libexec/neu-box/neuboxctl/neuboxctl pause' before installing this RPM" >&2
     exit 1
 fi
 
@@ -71,11 +72,17 @@ fi
 # Deliberately do not enable or start the service. Database/config migration
 # belongs to the deployment workflow, not an RPM scriptlet.
 /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || :
+
+%posttrans
+# This is the last RPM transaction hook, after the old package's cleanup.
 cat <<'EOF'
 Neu Box files installed:
-  1. A default /etc/neu-box/worker.env is installed; edit it for this node.
-  2. Run sudo neuboxctl setup. It configures runtime.env and Docker, then
-     asks before restarting Docker if a restart is needed.
+  1. /etc/neu-box/worker.env is installed or preserved.
+  2. Run sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup.
+     Setup starts the Worker and updates runtime.env and Docker configuration.
+  3. Run tests only after setup succeeds and the Worker is online:
+     sudo /usr/libexec/neu-box/neuboxctl/neuboxctl test
+     Full Ascend isolation tests require NEU_BOX_DRIVER_PROBE_IMAGE.
 See the deployment guide installed by this RPM (rpm -qd neuboxd).
 EOF
 
@@ -88,7 +95,7 @@ if [ "$1" -eq 0 ]; then
     fi
     if /usr/bin/systemctl is-active --quiet \
         neuboxd.service >/dev/null 2>&1; then
-        echo "neuboxd.service is active; run 'neuboxctl pause' before erasing this RPM" >&2
+        echo "neuboxd.service is active; run '/usr/libexec/neu-box/neuboxctl/neuboxctl pause' before erasing this RPM" >&2
         exit 1
     fi
     /usr/bin/systemctl disable neuboxd.service >/dev/null 2>&1 || :
@@ -103,10 +110,9 @@ fi
 %license LICENSE
 %doc DEPLOYMENT.md
 %attr(0755,root,root) /usr/local/bin/neubox
-/usr/local/bin/neu-sbox
-%attr(0755,root,root) /usr/local/bin/neu-box-runtime
-%attr(0755,root,root) /usr/local/bin/neu-box-hook
 %dir %{_libexecdir}/neu-box
+%attr(0755,root,root) %{_libexecdir}/neu-box/neu-box-runtime
+%attr(0755,root,root) %{_libexecdir}/neu-box/neu-box-hook
 %{_libexecdir}/neu-box/neuboxd
 %{_libexecdir}/neu-box/neuboxctl
 %attr(0755,root,root) %{_libexecdir}/neu-box/neu-box-sandbox
@@ -117,8 +123,6 @@ fi
 %{_datadir}/neu-box/info
 %attr(0644,root,root) %{_datadir}/neu-box/runtime.env.example
 %attr(0644,root,root) %{_datadir}/neu-box/manifest.json
-%{_sbindir}/neuboxctl
-%{_sbindir}/neuboxd
 %attr(0644,root,root) %{_unitdir}/neuboxd.service
 %config(noreplace) %attr(0640,root,root) %{_sysconfdir}/neu-box/worker.env
 %dir %attr(0750,root,root) %{_localstatedir}/lib/neu-box/worker

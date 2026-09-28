@@ -565,11 +565,10 @@ def _compose_source(args: argparse.Namespace, topdir: Path) -> tuple[Path, Path]
     )
     client = rootfs / "usr" / "local" / "bin" / "neubox"
     _copy_file(args.client_executable, client, 0o755)
-    (client.parent / "neu-sbox").symlink_to("neubox")
     for runtime_name in ("neu-box-runtime", "neu-box-hook"):
         _copy_file(
             args.runtime_bin_dir / runtime_name,
-            client.parent / runtime_name,
+            rootfs / "usr" / "libexec" / "neu-box" / runtime_name,
             0o755,
         )
     _copy_file(
@@ -594,13 +593,6 @@ def _compose_source(args: argparse.Namespace, topdir: Path) -> tuple[Path, Path]
     )
     if tests_entry.is_file():
         tests_entry.chmod(0o755)
-    worker_link = rootfs / "usr" / "sbin" / "neuboxd"
-    # usr/sbin 只用来放这两个链接，别的 _copy_* 都不会顺手把它建出来；
-    # os.symlink 要求链接所在的目录存在（目标可以不存在），所以这里要显式建。
-    worker_link.parent.mkdir(parents=True, exist_ok=True)
-    worker_link.symlink_to("../libexec/neu-box/neuboxd/neuboxd")
-    ctl_link = rootfs / "usr" / "sbin" / "neuboxctl"
-    ctl_link.symlink_to("../libexec/neu-box/neuboxctl/neuboxctl")
     _copy_file(
         args.unit,
         rootfs / "usr" / "lib" / "systemd" / "system" / "neuboxd.service",

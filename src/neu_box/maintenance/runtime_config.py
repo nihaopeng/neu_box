@@ -8,9 +8,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from neu_box.maintenance.paths import CTL_BIN, HOOK_BIN, RUNTIME_BIN
 
 _VERSION = "1"
-_DEFAULT_HOOK = "/usr/local/bin/neu-box-hook"
+_DEFAULT_HOOK = str(HOOK_BIN)
+_FORMER_PACKAGED_HOOK = "/usr/local/bin/neu-box-hook"
 _DEFAULT_PHASE = "createRuntime"
 _DEFAULT_RUNC = "/usr/local/bin/runc"
 _RUNC_PATHS = (
@@ -170,7 +172,7 @@ def ensure_runtime_config(
     port: int,
     *,
     real_runc: str | None = None,
-    wrapper: Path = Path("/usr/local/bin/neu-box-runtime"),
+    wrapper: Path = RUNTIME_BIN,
 ) -> RuntimeConfig:
     """Create or update runtime.env without relying on a separate config CLI.
 
@@ -214,12 +216,16 @@ def ensure_runtime_config(
     else:
         effective_runc = existing_runc or _DEFAULT_RUNC
 
-    effective_hook = values.get("NEU_BOX_HOOK") or _DEFAULT_HOOK
+    configured_hook = values.get("NEU_BOX_HOOK") or ""
+    effective_hook = (
+        _DEFAULT_HOOK if configured_hook in ("", _FORMER_PACKAGED_HOOK)
+        else configured_hook
+    )
     if docker_present:
         if not discovered and not existing_runc and real_runc is None:
             raise RuntimeError(
                 "已安装 Docker，但找不到 runc；请用 "
-                "neuboxctl setup --real-runc /真实/runc/路径"
+                f"sudo {CTL_BIN} setup --real-runc /真实/runc/路径"
             )
         _binary(effective_runc, "真实 runc", wrapper)
         _binary(effective_hook, "OCI hook")

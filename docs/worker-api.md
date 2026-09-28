@@ -1,10 +1,10 @@
 # Worker HTTP API
 
-本文面向不使用 `neu-sbox`、直接接入 Neu Box Worker 的后端系统，适用于
+本文面向不使用 `neubox`、直接接入 Neu Box Worker 的后端系统，适用于
 Neu Box `0.5.0`。Worker 默认监听 `http://<worker-host>:59075`，所有接口均
 返回 UTF-8；除纯文本日志接口外，请求和响应使用 JSON。
 
-`neu-sbox` 只是这些接口的客户端封装，不是调用 Worker 的必要条件。
+`neubox` 是这些接口的客户端封装；后端系统也可以直接调用 Worker。
 
 接口总览：
 

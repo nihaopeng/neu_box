@@ -69,16 +69,39 @@ def test_deferred_restart_leaves_worker_paused_and_resume_checks_live_docker(
     _installed(monkeypatch)
     config = tmp_path / "daemon.json"
     config.write_text('{"default-runtime":"neu-box-runtime","runtimes":'
-                      '{"neu-box-runtime":{"path":"/usr/local/bin/neu-box-runtime"}}}\n')
+                      '{"neu-box-runtime":{"path":"' + docker_config.RUNTIME_PATH + '"}}}\n')
     plan = docker_config.prepare_docker_config(config)
     assert plan is not None and plan.content is None
     monkeypatch.setattr(docker_config, "_runtime_active", lambda _plan: False)
     assert docker_config.activate_docker_config(plan, restart=False) is False
-    assert "sudo neuboxctl resume" in capsys.readouterr().out
+    assert "sudo /usr/libexec/neu-box/neuboxctl/neuboxctl resume" in capsys.readouterr().out
     with pytest.raises(RuntimeError, match="尚未加载"):
         docker_config.verify_docker_ready(config)
     monkeypatch.setattr(docker_config, "_runtime_active", lambda _plan: True)
     docker_config.verify_docker_ready(config)
+
+
+def test_upgrade_replaces_old_runtime_path_without_losing_docker_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _installed(monkeypatch)
+    config = tmp_path / "daemon.json"
+    config.write_text(json.dumps({
+        "data-root": "/data/docker",
+        "default-runtime": "neu-box-runtime",
+        "runtimes": {
+            "nvidia": {"path": "/usr/bin/nvidia-runtime"},
+            "neu-box-runtime": {"path": "/usr/local/bin/neu-box-runtime"},
+        },
+    }))
+
+    plan = docker_config.prepare_docker_config(config)
+
+    assert plan is not None and plan.content is not None
+    updated = json.loads(plan.content)
+    assert updated["data-root"] == "/data/docker"
+    assert updated["runtimes"]["nvidia"]["path"] == "/usr/bin/nvidia-runtime"
+    assert updated["runtimes"]["neu-box-runtime"]["path"] == docker_config.RUNTIME_PATH
 
 
 def test_restart_waits_for_effective_default(

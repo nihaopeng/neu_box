@@ -1,6 +1,6 @@
 """沙盒服务 API — 允许用户将当前终端进程加入独占设备的 cgroup 沙盒。
 
-内网用户可通过 HTTP 或 neu-sbox 客户端调用：
+内网用户可通过 HTTP 或 neubox 客户端调用：
   POST /sandbox/acquire   → 创建沙盒，把调用者的 shell PID 加入
   POST /sandbox/join      → 把 host PID 加入沙盒
   POST /sandbox/release   → 销毁沙盒，释放设备
@@ -154,7 +154,7 @@ def acquire():
         { "username": "pengyt", "pid": 12345, "device_num": 1,
           "cpu": 0, "memory": 0, "mem_unit": "GB" }
 
-    容器不在这里创建沙盒: 容器由沙盒里的 shell 起（submit 或 neu-sbox
+    容器不在这里创建沙盒: 容器由沙盒里的 shell 起（submit 或 neubox
     docker run），启动时由 OCI runtime hook 自动登记归属，借它所在沙盒的
     授权。
 

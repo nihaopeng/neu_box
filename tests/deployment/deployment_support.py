@@ -39,8 +39,8 @@ DEFAULT_URL = "http://127.0.0.1:59075"
 DEFAULT_CONFIG = "/etc/neu-box/worker.env"
 DEFAULT_MANIFEST = "/usr/share/neu-box/manifest.json"
 DEFAULT_SERVICE = "neuboxd.service"
-# 起服走 `neuboxctl setup`；RPM 在 /usr/sbin 装了这个符号链接。
-DEFAULT_CTL = "/usr/sbin/neuboxctl"
+# 起服走私有管理入口；RPM 不向 PATH 安装管理命令。
+DEFAULT_CTL = "/usr/libexec/neu-box/neuboxctl/neuboxctl"
 DEFAULT_DEVICE_FILTER = "davinci[0-9]+"
 DEFAULT_REAPER_INTERVAL = 30.0
 
@@ -1244,7 +1244,7 @@ class Deployment:
             pytest.fail(
                 f"前置缺失：找不到可执行的 neuboxctl {self.ctl_binary!r}；"
                 f"起服走 `neuboxctl setup`，该文件由 neuboxd RPM 装在 "
-                f"/usr/sbin/neuboxctl。路径不同时用 --deployment-ctl 指定",
+                f"{DEFAULT_CTL}。路径不同时用 --deployment-ctl 指定",
                 pytrace=False,
             )
 

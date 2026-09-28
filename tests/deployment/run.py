@@ -20,6 +20,44 @@ from __future__ import annotations
 import os
 import sys
 import sysconfig
+import urllib.error
+import urllib.request
+
+
+_DEFAULT_URL = "http://127.0.0.1:59075"
+
+
+def _target_url(argv: list[str]) -> str:
+    """Read the suite's URL option before pytest starts collecting tests."""
+    for index, arg in enumerate(argv):
+        for option in ("--url", "--deployment-url"):
+            if arg == option and index + 1 < len(argv):
+                return argv[index + 1]
+            if arg.startswith(f"{option}="):
+                return arg.split("=", 1)[1]
+    return _DEFAULT_URL
+
+
+def _worker_ready(url: str) -> bool:
+    """Fail once with an actionable message instead of failing every fixture."""
+    endpoint = f"{url.rstrip('/')}/healthz"
+    try:
+        # Deployment targets are reached directly, including when the root
+        # environment has an HTTP proxy configured.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(endpoint, timeout=5) as response:
+            if response.status == 200:
+                return True
+            reason = f"HTTP {response.status}"
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        reason = str(exc)
+    print(
+        f"实机验收未开始：Worker 健康检查失败（{endpoint}）：{reason}\n"
+        "先执行 sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup，"
+        "确认 /healthz 可访问，再运行 test。",
+        file=sys.stderr,
+    )
+    return False
 
 
 def suite_dir() -> str:
@@ -74,6 +112,10 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["--self-check"]:
         return _self_check()
+
+    informational = {"--collect-only", "--help", "-h", "--version", "--fixtures", "--markers"}
+    if not informational.intersection(argv) and not _worker_ready(_target_url(argv)):
+        return 1
 
     import pytest
 

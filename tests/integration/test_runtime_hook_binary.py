@@ -92,7 +92,7 @@ PLACEHOLDER_SANDBOX = 'sbx_yuxd_task-bundle.slice'
 CONTAINER_ID = 'c' * 64
 
 HOOK_ENV = 'NEU_BOX_HOOK_BIN'
-SYSTEM_HOOK = '/usr/local/bin/neu-box-hook'
+SYSTEM_HOOK = '/usr/libexec/neu-box/neu-box-hook'
 
 # 契约里这个端点收的全部字段：三个必填 + 两个可选的交叉验证值。
 # 键名漂了（多一个不认识的键）这里就该失败。

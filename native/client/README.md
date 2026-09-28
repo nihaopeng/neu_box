@@ -246,8 +246,8 @@ sudo install -m 0755 neubox /usr/local/bin/neubox
 ```
 
 正常部署不需要手工构建：仓库根的 `deploy/build_release.py` 会构建静态
-`neubox` 并放入 `neuboxd` RPM。安装后是 `/usr/local/bin/neubox`，
-`/usr/local/bin/neu-sbox` 是兼容符号链接；与 Worker 一起升级。
+`neubox` 并放入 `neuboxd` RPM。安装后公开的命令是
+`/usr/local/bin/neubox`，与 Worker 一起升级。
 
 | 变量 | 说明 |
 |---|---|

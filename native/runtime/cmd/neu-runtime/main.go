@@ -5,7 +5,7 @@
 //
 //	{
 //	  "default-runtime": "neu-box-runtime",
-//	  "runtimes": { "neu-box-runtime": { "path": "/usr/local/bin/neu-box-runtime" } }
+//	  "runtimes": { "neu-box-runtime": { "path": "/usr/libexec/neu-box/neu-box-runtime" } }
 //	}
 //
 // 也就是说这台机器上所有容器（包括跟我们完全无关的业务容器）的启动都从这条路

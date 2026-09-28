@@ -13,11 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from neu_box.maintenance.runtime_config import _discover_binary
+from neu_box.maintenance.paths import CTL_BIN, RUNTIME_BIN
 
 
 DAEMON_CONFIG = Path("/etc/docker/daemon.json")
 RUNTIME_NAME = "neu-box-runtime"
-RUNTIME_PATH = "/usr/local/bin/neu-box-runtime"
+RUNTIME_PATH = str(RUNTIME_BIN)
 _DOCKER_PATHS = ("/usr/bin/docker", "/usr/local/bin/docker", "/bin/docker")
 _DOCKERD_PATHS = ("/usr/bin/dockerd", "/usr/local/bin/dockerd", "/usr/sbin/dockerd")
 
@@ -159,7 +160,8 @@ def verify_docker_ready(path: Path = DAEMON_CONFIG) -> None:
     if plan is None or plan.content is not None or not _runtime_active(plan):
         raise RuntimeError(
             "Docker 尚未加载 neu-box-runtime；先执行 sudo systemctl restart docker，"
-            "确认 docker info --format '{{.DefaultRuntime}}'，然后再执行 sudo neuboxctl resume"
+            "确认 docker info --format '{{.DefaultRuntime}}'，然后再执行 "
+            f"sudo {CTL_BIN} resume"
         )
 
 
@@ -184,7 +186,7 @@ def activate_docker_config(plan: DockerConfig | None, *, restart: bool | None = 
             "Docker 尚未加载 neu-box-runtime；Worker 保持暂停。完成维护后执行：\n"
             "  sudo systemctl restart docker\n"
             "  docker info --format '{{.DefaultRuntime}}'\n"
-            "  sudo neuboxctl resume",
+            f"  sudo {CTL_BIN} resume",
             flush=True,
         )
         return False

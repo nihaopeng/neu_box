@@ -41,7 +41,7 @@ func TestMain(m *testing.M) {
 func testConfig() config.Config {
 	cfg := config.Default()
 	cfg.RealRunc = "/bin/true"
-	cfg.HookPath = "/usr/local/bin/neu-box-hook"
+	cfg.HookPath = "/usr/libexec/neu-box/neu-box-hook"
 	return cfg
 }
 

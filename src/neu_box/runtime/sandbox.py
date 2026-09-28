@@ -36,7 +36,7 @@ CONTAINER_EXIT_TIMEOUT = 30.0
 
 # `docker stop` 给容器的 SIGTERM 宽限（秒）。到点 Docker 自己会 SIGKILL；还停
 # 不下来就再补一次 ``kill``，最终由 ``_await_container_exit`` 判定。
-CONTAINER_STOP_GRACE = 10.0
+CONTAINER_STOP_GRACE = 10
 
 # 启动对账时等一个容器停下来的上限（秒）。启动路径不能在这里无限等：等不到就
 # 保留登记，收尸线程下一轮再收（见 ``retire_containers_on_startup``）。
@@ -1231,7 +1231,7 @@ class SbxManager:
             for value in (record.get('container_ref'), record.get('container_id'))
             if value
         }
-        # Also remove containers created by ``neu-sbox docker run`` that died
+        # Also remove containers created by ``neubox docker run`` that died
         # before the runtime hook could register them. Registered containers
         # are kept for the ordered revoke/kill/pidfd path below.
         if self.remove_docker_containers_for_sandbox(

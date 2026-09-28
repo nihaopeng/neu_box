@@ -74,24 +74,24 @@ Neu Box 由本仓库和 WebUI 仓库组成：
 ```bash
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env  # RPM 已提供默认配置；按节点需要修改
-sudo neuboxctl setup
+sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup
 curl -fsS http://127.0.0.1:59075/healthz
 # 维护窗口内：将示例镜像名换成本机已有的普通镜像和 Ascend 驱动探针镜像
 sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag neuboxctl test
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/neuboxctl/neuboxctl test
 ```
 
 `neuboxctl setup` 自动查找本机 runc，生成或迁移 runtime 配置，迁移并检查数据库，以暂停状态启动
 Worker；同时合并并校验 Docker 配置。需要重启 Docker 时会询问 `y/N`，选 Y 则等待 Docker
 启动并恢复调度；选 N 则让 Worker 保持暂停，按提示手动重启 Docker 后运行
-`sudo neuboxctl resume`。默认等待 Worker 启动 60 秒，可用
+`sudo /usr/libexec/neu-box/neuboxctl/neuboxctl resume`。默认等待 Worker 启动 60 秒，可用
 `--timeout` 调整。仅当自动查找不到 runc，或需要指定另一实现时，
-才使用 `sudo neuboxctl setup --real-runc /实际路径`；生成的配置可查看
+才使用 `sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup --real-runc /实际路径`；生成的配置可查看
 `/etc/neu-box/runtime.env`。
-Worker 默认监听 `0.0.0.0:59075`，运维入口是 `/usr/sbin/neuboxctl`；
+Worker 默认监听 `0.0.0.0:59075`，运维入口是 `/usr/libexec/neu-box/neuboxctl/neuboxctl`；
 客户端是 `/usr/local/bin/neubox`。RPM 安装脚本不改 `daemon.json`；`setup` 在安装后
 设置 `default-runtime` 和 `runtimes.neu-box-runtime.path`。非交互环境默认暂缓重启，
-可用 `sudo neuboxctl setup --restart-docker` 自动完成。详见 [部署手册](docs/deployment.md)。
+可用 `sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup --restart-docker` 自动完成。详见 [部署手册](docs/deployment.md)。
 
 `setup` 通过后跑 `neuboxctl test` 做验收：套件随 RPM 安装在
 `/usr/libexec/neu-box/tests/`，是一个自带 pytest 的 PyInstaller 产物（部署机不需要
@@ -111,13 +111,13 @@ Python），打真实 HTTP API、真实任务、真实设备、真实容器，�
 服务的停/起属于维护动作，由运维入口负责：
 
 ```bash
-neuboxd --version               # 查看 Worker 版本
+/usr/libexec/neu-box/neuboxd/neuboxd --version  # 查看 Worker 版本
 sudo systemctl status neuboxd.service          # 查看服务状态
 sudo journalctl -u neuboxd.service -n 100 -f   # 跟踪 Worker 日志
-sudo neuboxctl pause           # 唯一的停服路径：排空 → 备份 → cleanup → 停服
-sudo neuboxctl setup           # 唯一的启动路径：迁移 → 拉起 → 健康检查 → 恢复调度
-sudo neuboxctl db status       # 查看数据库 schema 状态
-sudo neuboxctl db backup       # 创建一致的 SQLite 备份
+sudo /usr/libexec/neu-box/neuboxctl/neuboxctl pause           # 唯一的停服路径：排空 → 备份 → cleanup → 停服
+sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup           # 唯一的启动路径：迁移 → 拉起 → 健康检查 → 恢复调度
+sudo /usr/libexec/neu-box/neuboxctl/neuboxctl db status       # 查看数据库 schema 状态
+sudo /usr/libexec/neu-box/neuboxctl/neuboxctl db backup       # 创建一致的 SQLite 备份
 ```
 
 `RefuseManualStop=yes` 是刻意的：`systemctl stop` 和 `systemctl restart` 会被
@@ -126,9 +126,9 @@ systemd 拒绝，因为直接停服务会跳过排空、备份和旧 BPF 清理�
 普通 RPM 升级分三步，前一步成功后再执行下一步：
 
 ```bash
-sudo neuboxctl pause
+sudo /usr/libexec/neu-box/neuboxctl/neuboxctl pause
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudo neuboxctl setup
+sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup
 ```
 
 旧版 `pause` 暂停接收新任务及分配沙盒，等待运行任务和沙盒结束，再备份数据库与配置、
@@ -142,7 +142,7 @@ Worker 保持在线且暂停，不会自动杀任务或继续升级。
 
 ## 使用 `neubox`
 
-`neubox` 直连 Worker，不经过 WebUI；`neu-sbox` 是兼容命令名：
+`neubox` 直连 Worker，不经过 WebUI：
 
 ```bash
 # 检查 Worker 和 API 兼容性

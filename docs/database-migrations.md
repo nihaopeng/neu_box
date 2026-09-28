@@ -110,10 +110,10 @@ def upgrade(conn):
 本地手动检查：
 
 ```bash
-neuboxctl --config /path/to/worker.env db status
-neuboxctl --config /path/to/worker.env db migrate
-neuboxctl --config /path/to/worker.env db check
-neuboxctl --config /path/to/worker.env db backup \
+/usr/libexec/neu-box/neuboxctl/neuboxctl --config /path/to/worker.env db status
+/usr/libexec/neu-box/neuboxctl/neuboxctl --config /path/to/worker.env db migrate
+/usr/libexec/neu-box/neuboxctl/neuboxctl --config /path/to/worker.env db check
+/usr/libexec/neu-box/neuboxctl/neuboxctl --config /path/to/worker.env db backup \
   --output-dir /path/to/backups
 ```
 
