@@ -39,11 +39,13 @@ init 选项:
     --path <文件>        默认 /etc/neu-box/runtime.env
     --real-runc <路径>   wrapper 后面真正接的 runtime（安装脚本现场发现）
     --worker-url <URL>   hook 上报的 worker 地址
+    --sync-worker-url    始终将 worker URL 同步为 --worker-url；其他键保留手改值
     --hook <路径>        wrapper 注入 OCI bundle 的 hook 路径
     --hook-phase <名>    createRuntime（默认）或 prestart
     --force              忽略文件里已有的值，整份重写
 
 已存在的键只有在**还等于内置默认值**时才会被上面这些值覆盖；手改过的值不动。
+--sync-worker-url 是唯一例外，必须同时提供 --worker-url。
 不认识的键、注释、空行一律原样保留。
 `
 
@@ -74,8 +76,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// parseInitArgs 认 --key=value 和 --key value 两种写法。手写解析：这里只有五个
-// 选项，引 flag 包反而多一层"为什么 wrapper 不用它"的解释。
+// parseInitArgs 认 --key=value 和 --key value 两种写法。选项很少，手写解析
+// 仍能保持部署工具的参数契约清楚。
 func parseInitArgs(args []string, stderr io.Writer) (config.Options, bool) {
 	opts := config.Options{}
 	set := func(name, value string) bool {
@@ -102,6 +104,10 @@ func parseInitArgs(args []string, stderr io.Writer) (config.Options, bool) {
 			opts.Force = true
 			continue
 		}
+		if arg == "--sync-worker-url" {
+			opts.SyncWorkerURL = true
+			continue
+		}
 		name, value, inline := strings.Cut(arg, "=")
 		if !inline {
 			switch name {
@@ -120,6 +126,10 @@ func parseInitArgs(args []string, stderr io.Writer) (config.Options, bool) {
 		if !set(name, value) {
 			return opts, false
 		}
+	}
+	if opts.SyncWorkerURL && strings.TrimSpace(opts.WorkerURL) == "" {
+		fmt.Fprintln(stderr, "--sync-worker-url 必须同时提供 --worker-url")
+		return opts, false
 	}
 	return opts, true
 }

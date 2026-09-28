@@ -11,7 +11,7 @@ import subprocess
 import time
 import urllib.request
 
-from neu_box.config import env_text, user_data_dir
+from neu_box.config import RUNTIME_CONFIG_PATH, env_text, user_data_dir
 from neu_box.migrations.engine import backup_database
 from neu_box.storage import database_path
 from neu_box.maintenance.markers import (
@@ -97,6 +97,10 @@ def pause(port: int, timeout: int, config: Path | None) -> None:
         config_backup = backup.with_suffix(".env")
         shutil.copyfile(config, config_backup)
         print(f"配置备份: {config_backup}", flush=True)
+    if RUNTIME_CONFIG_PATH.is_file():
+        runtime_backup = backup.with_suffix(".runtime.env")
+        shutil.copyfile(RUNTIME_CONFIG_PATH, runtime_backup)
+        print(f"Runtime 配置备份: {runtime_backup}", flush=True)
     subprocess.run([str(sandbox_executable_path()), "cleanup"], check=True)
     # 备份和 cleanup 全部成功后才停服；前面失败时保留暂停中的 API 供重试。
     stop_worker_after_cleanup()

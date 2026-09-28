@@ -65,12 +65,13 @@ func builtinDefault(key string) string {
 // 路径、worker 的地址、hook 的安装路径、hook 注入的 phase。留空表示"这个值我
 // 没有发现"，那就用内置默认值。
 type Options struct {
-	Path      string // 空 = DefaultPath
-	WorkerURL string
-	HookPath  string
-	HookPhase string
-	RealRunc  string
-	Force     bool // 忽略文件里已有的值，按内置默认值 + 上面的值整份重写
+	Path          string // 空 = DefaultPath
+	WorkerURL     string
+	SyncWorkerURL bool // 将 WorkerURL 视为 worker.env 的权威值，仅同步此键
+	HookPath      string
+	HookPhase     string
+	RealRunc      string
+	Force         bool // 忽略文件里已有的值，按内置默认值 + 上面的值整份重写
 }
 
 // Result 描述 Ensure 干了什么，给部署脚本打印。
@@ -93,7 +94,8 @@ type Result struct {
 //  2. 已存在 → 跑版本梯子；补上缺失的键；**只改那些还等于内置默认值的键**。
 //     这最后一条是给"包里的模板落了默认值、但本机事实不是默认值"那个老问题
 //     用的（模板写死 /usr/local/bin/runc，本机 runc 不在那儿）。运维手改过的
-//     值一律不动 —— 要整份重写就显式给 Force。
+//     值一律不动 —— 要整份重写就显式给 Force。SyncWorkerURL 是唯一例外：
+//     显式设置时，WorkerURL 来自 worker.env，每次都将该键同步到指定值。
 //  3. 不认识的键、注释、空行原样保留。这份文件大半是解释性注释，重排等于删。
 func Ensure(opts Options) (Result, error) {
 	path := strings.TrimSpace(opts.Path)
@@ -101,6 +103,9 @@ func Ensure(opts Options) (Result, error) {
 		path = DefaultPath
 	}
 	res := Result{Path: path, ToVersion: ConfigVersion}
+	if opts.SyncWorkerURL && strings.TrimSpace(opts.WorkerURL) == "" {
+		return res, fmt.Errorf("同步 %s 时必须提供 WorkerURL", EnvWorkerURL)
+	}
 
 	raw, err := os.ReadFile(path)
 	exists := err == nil
@@ -161,6 +166,12 @@ func Ensure(opts Options) (Result, error) {
 		value := want[key]
 		if value == "" {
 			continue // 没发现这个事实就不动它
+		}
+		if key == EnvWorkerURL && opts.SyncWorkerURL {
+			if values[key] != value {
+				updates[key] = value
+			}
+			continue
 		}
 		switch current := values[key]; {
 		case current == "":

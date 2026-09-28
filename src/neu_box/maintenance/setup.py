@@ -1,15 +1,16 @@
-"""迁移数据库、启动并检查 Worker，完成后恢复调度。"""
+"""配置 OCI runtime、迁移数据库、启动并检查 Worker，完成后恢复调度。"""
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
 import urllib.error
 from pathlib import Path
 
 from neu_box import __version__
-from neu_box.config import env_int
+from neu_box.config import RUNTIME_CONFIG_PATH, env_int
 from neu_box.migrations.engine import check_database, migrate_database
 from neu_box.storage import (
     MIGRATIONS_PACKAGE,
@@ -34,6 +35,9 @@ _LEGACY_CONFIG_KEYS = {
     "command_max_completed": "NEU_BOX_COMMAND_MAX_COMPLETED",
     "command_queue_recent": "NEU_BOX_COMMAND_QUEUE_RECENT",
 }
+
+_RUNTIME_CONFIG_TOOL = Path("/usr/local/bin/neu-box-config")
+_RUNTIME_WRAPPER = Path("/usr/local/bin/neu-box-runtime")
 
 
 def _unquote(value: str) -> str:
@@ -168,7 +172,46 @@ def migrate_config(config: Path | None) -> None:
         raise RuntimeError(f"写入迁移后配置失败: {config}: {exc}") from exc
 
 
-def setup(port: int | None, timeout: int, config: Path | None = None) -> None:
+def _real_runc_path(explicit: str | None) -> str | None:
+    """Find the OCI runtime behind our wrapper without risking recursion."""
+    discovered = explicit or shutil.which("runc")
+    if not discovered:
+        if shutil.which("docker") and not RUNTIME_CONFIG_PATH.is_file():
+            raise RuntimeError(
+                "已安装 Docker，但找不到 runc；请用 "
+                "neuboxctl setup --real-runc /真实/runc/路径"
+            )
+        return None
+    path = Path(discovered).expanduser().resolve()
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise RuntimeError(f"真实 runc 不存在或不可执行: {path}")
+    if path == _RUNTIME_WRAPPER.resolve():
+        raise RuntimeError(f"runc 指向 Neu Box wrapper，配置后会递归调用: {path}")
+    return str(path)
+
+
+def initialize_runtime_config(port: int, real_runc: str | None = None) -> None:
+    """Keep the bundled OCI hook's Worker URL in step with worker.env."""
+    if not _RUNTIME_CONFIG_TOOL.is_file() or not os.access(_RUNTIME_CONFIG_TOOL, os.X_OK):
+        raise RuntimeError(f"合包中缺少可执行的配置工具: {_RUNTIME_CONFIG_TOOL}")
+    command = [
+        str(_RUNTIME_CONFIG_TOOL), "init",
+        "--path", str(RUNTIME_CONFIG_PATH),
+        "--worker-url", f"http://127.0.0.1:{port}",
+        "--sync-worker-url",
+    ]
+    path = _real_runc_path(real_runc)
+    if path is not None:
+        command.extend(("--real-runc", path))
+    subprocess.run(command, check=True)
+
+
+def setup(
+    port: int | None,
+    timeout: int,
+    config: Path | None = None,
+    real_runc: str | None = None,
+) -> None:
     require_root()
     if subprocess.run(["systemctl", "is-active", "--quiet", SERVICE]).returncode == 0:
         raise RuntimeError("Worker 仍在运行，请先执行 neuboxctl pause")
@@ -178,6 +221,9 @@ def setup(port: int | None, timeout: int, config: Path | None = None) -> None:
     # migrated, so the health check reaches the port the new service loads.
     # The environment is the sole source of the runtime port.
     port = env_int("NEU_BOX_PORT", 59075)
+    if not 1 <= port <= 65535:
+        raise RuntimeError(f"NEU_BOX_PORT 必须在 1-65535 之间，实际为 {port}")
+    initialize_runtime_config(port, real_runc)
     for operation in (migrate_database, check_database):
         status = operation(
             database_path(), MIGRATIONS_PACKAGE, REQUIRED_COLUMNS, REQUIRED_INDEXES,

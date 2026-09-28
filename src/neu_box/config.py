@@ -16,6 +16,9 @@ class ConfigError(RuntimeError):
     """Configuration cannot be loaded safely."""
 
 
+RUNTIME_CONFIG_PATH = Path("/etc/neu-box/runtime.env")
+
+
 def load_role_environment(
     role: str,
     explicit_path: str | os.PathLike[str] | None = None,

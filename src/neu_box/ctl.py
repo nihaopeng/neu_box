@@ -41,11 +41,15 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     setup_parser = commands.add_parser(
-        "setup", help="迁移数据库、启动并检查 Worker，然后恢复调度",
+        "setup", help="配置 OCI runtime、迁移数据库、启动并检查 Worker，然后恢复调度",
     )
     setup_parser.add_argument(
         "--timeout", type=int, default=60,
         help="等待健康检查的秒数，默认 60",
+    )
+    setup_parser.add_argument(
+        "--real-runc",
+        help="真实 runc 的路径；默认从 PATH 查找，容器节点可用此项指定自定义路径",
     )
 
     pause_parser = commands.add_parser(
@@ -84,7 +88,7 @@ def _run_control(command: str, args: argparse.Namespace, config) -> int:
     if command == "pause":
         pause(port, args.timeout, config)
     else:
-        setup(None, args.timeout, config)
+        setup(None, args.timeout, config, real_runc=args.real_runc)
     return 0
 
 

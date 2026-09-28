@@ -154,8 +154,8 @@ runc 杀掉 hook 时连错误信息都拿不到。
 ## 运行配置
 
 `/etc/neu-box/runtime.env`（角色约定：`/etc/neu-box/<role>.env`，dotenv 格式，
-键一律 `NEU_BOX_*` 前缀）。这份文件由 `neu-box-config` 生成和迁移，**不由 RPM
-安装** —— 一个文件一个写者，包和部署脚本都写过的配置最后谁都不拥有它。仓库里的
+键一律 `NEU_BOX_*` 前缀）。这份文件由 `neuboxctl setup` 调用 `neu-box-config`
+生成和迁移，**不由 RPM 安装**。仓库里的
 `deploy/config/runtime.env.example` 只是键的文档：
 
 | 键 | 默认值 | 说明 |
@@ -167,7 +167,7 @@ runc 杀掉 hook 时连错误信息都拿不到。
 
 文件里另有一个 `NEU_BOX_CONFIG_VERSION`：配置 schema 的版本，**和软件版本是两件
 事**。它只增不减，由一个有序的迁移梯子驱动（`internal/config/migrate.go`）。迁移
-在部署时跑（`neu-box-config init`，由 `install.sh` 调用），不在容器创建路径上跑 ——
+在部署时跑（`neuboxctl setup` 调用 `neu-box-config init`），不在容器创建路径上跑 ——
 runtime 没有常驻进程，"启动时"就是部署那一刻。忘了迁移不会让容器起不来：运行时的
 读取是宽容的，只是文件停在旧版本。
 
@@ -181,12 +181,11 @@ runtime 没有常驻进程，"启动时"就是部署那一刻。忘了迁移不�
 配置读不动（文件缺失、语法错）不致命：用默认值接着干活，问题打一行 stderr。
 在容器创建路径上因为配置文件打不开就拒绝启动，代价比配错了还大。
 
-**为什么不塞进 `worker.env`**：两种配置的写者和迁移规则不同。`worker.env` 由
-RPM 提供初始文件，`runtime.env` 由 `neu-box-config` 生成，避免同一文件有两个写者。
+**为什么不塞进 `worker.env`**：两种配置的读取时机和迁移规则不同。`worker.env` 由
+RPM 提供初始文件，`runtime.env` 由 `setup` 调用配置工具生成。
 
-**一份事实两处描述的地方**：`NEU_BOX_WORKER_URL` 里的端口和 worker.env 的
-`NEU_BOX_PORT` 说的是同一件事，会漂。用户执行 `neu-box-config init` 时要把
-`worker.env` 中的端口传给 `--worker-url`；改端口时两处都要动。
+`NEU_BOX_WORKER_URL` 的端口由 `worker.env` 的 `NEU_BOX_PORT` 决定。每次运行
+`neuboxctl setup` 都会同步这个值；修改 Worker 端口后重新运行 `setup`。
 
 `NEU_BOX_REAL_RUNC` 必须可配：以后和 Ascend Docker Runtime 串接时，wrapper
 后面接的就不是 runc 了。

@@ -63,6 +63,48 @@ func TestInitAcceptsInlineValues(t *testing.T) {
 	}
 }
 
+func TestInitSyncWorkerURLKeepsOtherCustomValues(t *testing.T) {
+	path := tempPath(t)
+	if code, _, stderr := runCLI(t,
+		"init", "--path", path, "--worker-url=http://127.0.0.1:61234",
+		"--hook-phase", "prestart"); code != 0 {
+		t.Fatalf("首次初始化失败：%s", stderr)
+	}
+	code, stdout, stderr := runCLI(t,
+		"init", "--path", path, "--sync-worker-url",
+		"--worker-url", "http://127.0.0.1:61235",
+		"--hook-phase", "createRuntime")
+	if code != 0 {
+		t.Fatalf("同步失败：%s", stderr)
+	}
+	if !strings.Contains(stdout, config.EnvWorkerURL) {
+		t.Fatalf("输出没有说明已同步 Worker URL：%s", stdout)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读文件：%v", err)
+	}
+	for _, want := range []string{
+		config.EnvWorkerURL + "=http://127.0.0.1:61235",
+		config.EnvHookPhase + "=prestart",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("同步后缺少 %q：\n%s", want, raw)
+		}
+	}
+}
+
+func TestInitSyncWorkerURLRequiresWorkerURL(t *testing.T) {
+	path := tempPath(t)
+	code, _, stderr := runCLI(t, "init", "--path", path, "--sync-worker-url")
+	if code != 2 || !strings.Contains(stderr, "--worker-url") {
+		t.Fatalf("应报缺少 --worker-url：code=%d stderr=%s", code, stderr)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("参数错误不该写文件：%v", err)
+	}
+}
+
 // 幂等：部署脚本升级时会重复调用，第二次不该是一场空响。
 func TestInitIsIdempotentAndSaysSo(t *testing.T) {
 	path := tempPath(t)

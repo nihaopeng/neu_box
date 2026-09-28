@@ -165,6 +165,56 @@ func TestEnsureKeepsOperatorEdits(t *testing.T) {
 	}
 }
 
+func TestEnsureSyncWorkerURLOnlyUpdatesWorkerURL(t *testing.T) {
+	cleanEnv(t)
+	path := filepath.Join(t.TempDir(), "runtime.env")
+	content := "# 运维注释，不要丢\n" +
+		EnvVersion + "=1\n" +
+		EnvWorkerURL + "=http://127.0.0.1:61234\n" +
+		EnvHookPhase + "=prestart\n" +
+		EnvRealRunc + "=/opt/custom-runc\n" +
+		"NEU_BOX_CUSTOM=keep\n"
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+		t.Fatalf("写文件：%v", err)
+	}
+
+	result, err := Ensure(Options{
+		Path: path, WorkerURL: "http://127.0.0.1:61235", SyncWorkerURL: true,
+		HookPhase: "createRuntime", RealRunc: "/opt/discovered-runc",
+	})
+	if err != nil {
+		t.Fatalf("同步 Worker URL：%v", err)
+	}
+	if len(result.Updated) != 1 || result.Updated[0] != EnvWorkerURL {
+		t.Fatalf("只能改 Worker URL：%+v", result.Updated)
+	}
+	want := strings.Replace(content, ":61234", ":61235", 1)
+	if got := readFile(t, path); got != want {
+		t.Fatalf("同步改动了其他内容：\n实际：%s\n预期：%s", got, want)
+	}
+
+	result, err = Ensure(Options{
+		Path: path, WorkerURL: "http://127.0.0.1:61235", SyncWorkerURL: true,
+	})
+	if err != nil {
+		t.Fatalf("重复同步：%v", err)
+	}
+	if len(result.Updated) != 0 || readFile(t, path) != want {
+		t.Fatalf("重复同步必须幂等：%+v", result)
+	}
+}
+
+func TestEnsureSyncWorkerURLRequiresValueBeforeWriting(t *testing.T) {
+	cleanEnv(t)
+	path := filepath.Join(t.TempDir(), "runtime.env")
+	if _, err := Ensure(Options{Path: path, SyncWorkerURL: true}); err == nil {
+		t.Fatal("缺少 Worker URL 时必须拒绝同步")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("参数错误不该写文件：%v", err)
+	}
+}
+
 func TestEnsureForceRewritesEverything(t *testing.T) {
 	cleanEnv(t)
 	path := filepath.Join(t.TempDir(), "runtime.env")

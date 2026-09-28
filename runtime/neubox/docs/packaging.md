@@ -69,12 +69,12 @@ bash deploy/rpm/build_rpm.sh --source-only   # 只出 tar.gz 和渲染后的 spe
 
 | 路径 | 权限 | 说明 |
 |---|---|---|
-| `/etc/neu-box` | 0750 root:root | `worker.env` 归包；`runtime.env` 由配置工具生成 |
+| `/etc/neu-box` | 0750 root:root | `worker.env` 归包；`runtime.env` 由 `neuboxctl setup` 生成 |
 | `/usr/local/bin/neu-box-runtime` | 0755 | wrapper |
 | `/usr/local/bin/neu-box-hook` | 0755 | OCI hook |
 | `/usr/local/bin/neu-box-config` | 0755 | 配置生成/迁移 |
 
-包里**没有** `runtime.env`：那份文件由用户执行 `neu-box-config init` 生成。
+包里**没有** `runtime.env`：执行 `neuboxctl setup` 时生成或迁移它。
 键的说明模板安装在 `/usr/share/neu-box/runtime.env.example`。
 
 ### 为什么路径写死在 /usr/local/bin

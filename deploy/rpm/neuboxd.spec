@@ -73,10 +73,11 @@ fi
 # belongs to the deployment workflow, not an RPM scriptlet.
 /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || :
 cat <<'EOF'
-Neu Box files installed. Docker configuration and restart are manual:
-  1. Run neu-box-config init with this host's real runc path and Worker URL.
-  2. Add neu-box-runtime to /etc/docker/daemon.json and set default-runtime.
-  3. Run neuboxctl setup. Restart dockerd in a maintenance window.
+Neu Box files installed:
+  1. Edit /etc/neu-box/worker.env and run sudo neuboxctl setup.
+     Setup also generates or migrates /etc/neu-box/runtime.env.
+  2. For Docker, add neu-box-runtime to /etc/docker/daemon.json and set
+     default-runtime. Restart dockerd manually in a maintenance window.
 See the deployment guide installed by this RPM (rpm -qd neuboxd).
 EOF
 

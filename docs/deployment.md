@@ -6,10 +6,9 @@
 # 首次安装：一个 RPM 安装 Worker、client 与 runtime 的程序文件
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env          # 手动配置监听地址、设备过滤器、设备状态脚本等
-sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
+sudo neuboxctl setup                     # 配置 runtime、迁移数据库并启动 Worker
 sudo neu-box-config show
 sudoedit /etc/docker/daemon.json         # 手动合并下方两个 Docker 配置键
-sudo neuboxctl setup              # 检查/迁移数据库，启动 Worker，健康检查通过后恢复调度
 # 用户在维护窗口确认现有容器后，手动重启 Docker
 docker ps
 sudo systemctl restart docker
@@ -20,17 +19,21 @@ sudo neuboxctl test               # 部署后真机测试
 # 升级：先 pause，再装同一个包、迁移配置、setup、验收
 sudo neuboxctl pause
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
 sudo neuboxctl setup
 sudo neuboxctl test
 ```
 
 `pause` 是升级前必须执行的停服路径：排空任务和沙盒、备份数据库和配置、清理旧 BPF pins 后停止 Worker；`setup` 是唯一启动路径：迁移旧配置和 SQLite schema，加载新版 BPF，`/healthz` 通过后恢复调度。启动和停止统一走 `neuboxctl setup` / `pause`，只读观察使用 `systemctl status`、`journalctl`；等待超时可用 `--timeout <秒>` 调整。
 
-`neu-box-config init` 由用户执行，生成或迁移 `/etc/neu-box/runtime.env`，不会覆盖
-手工改过的值。`--real-runc` 必须指向本机真正的 runc，`--worker-url` 的端口要与
-`worker.env` 的 `NEU_BOX_PORT` 一致。RPM 自身不编辑 Docker 配置、不启动 Worker、
-不重启 dockerd。
+`pause` 备份数据库时，也会把现有的 `worker.env` 和 `runtime.env` 复制到同一备份目录；
+runtime 配置备份以 `.runtime.env` 结尾。
+
+`setup` 从 `worker.env` 的 `NEU_BOX_PORT` 配置 runtime 的 Worker 地址，并生成或迁移
+`/etc/neu-box/runtime.env`。它会查找本机的 runc；若 Docker 已安装但找不到 runc，
+用 `sudo neuboxctl setup --real-runc /实际路径` 指定。没有 Docker 的宿主机任务节点
+可以直接运行 `setup`。`setup` 每次都会同步 Worker 地址；runtime 的其他手工配置
+保持不变。`neu-box-config show` 可检查最终生效值。RPM 自身不编辑 Docker 配置、
+不启动 Worker、不重启 dockerd。
 
 用 `sudoedit /etc/docker/daemon.json` 将下面两个键**合并**进现有 JSON，保留原有
 键和值；如果文件不存在，创建包含这些键的 JSON 对象：
@@ -167,8 +170,9 @@ build/release/pyinstaller-dist/neu-box-deployment-tests/neu-box-deployment-tests
 /usr/local/bin/neu-box-config                    runtime 配置工具
 /usr/lib/systemd/system/neuboxd.service         systemd unit
 
-# 配置：setup 迁移旧键，不覆盖自定义值
+# 配置：setup 迁移旧键；runtime 的 Worker URL 跟随 NEU_BOX_PORT
 /etc/neu-box/worker.env                         Worker 配置
+/etc/neu-box/runtime.env                        OCI runtime 配置，由 setup 生成或迁移
 
 # 数据库：setup 迁移 schema，pause 备份，pending 任务保留
 /var/lib/neu-box/worker/neu_box.db              SQLite 数据库

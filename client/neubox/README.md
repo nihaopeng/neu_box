@@ -110,8 +110,9 @@ docker run --annotation sandbox_cgroup=<沙盒名> --rm -it ubuntu bash
 沙盒名按本进程 PID 反查（`GET /sandbox/status?pid=<自己>`）；查不到直接报错，
 不会退化成"不加 annotation 照样起"。
 
-`neu-box-runtime` 随同一个 `neuboxd` RPM 安装；用户需用 `neu-box-config init`
-设置真正的 runc，再手动设置 Docker 的 `default-runtime`。
+`neu-box-runtime` 随同一个 `neuboxd` RPM 安装；`neuboxctl setup` 配置 Worker
+地址，并在 Docker 节点查找真正的 runc。用户再手动设置 Docker 的
+`default-runtime` 并重启 dockerd。
 
 `run` / `start` / `restart` / `status` 以外的 docker 子命令（build / ps / compose / …）不支持，
 这些操作直接使用原生 Docker 命令。提交容器任务时，推荐在 `submit` 的命令或

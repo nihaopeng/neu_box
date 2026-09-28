@@ -74,9 +74,9 @@ Neu Box 由本仓库和 WebUI 仓库组成：
 ```bash
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env
-sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
-sudoedit /etc/docker/daemon.json  # 手动设置 default-runtime / runtimes.neu-box-runtime
 sudo neuboxctl setup
+sudo neu-box-config show       # 可选：检查 setup 生成的 runtime 配置
+sudoedit /etc/docker/daemon.json  # 容器场景：手动设置 default-runtime / runtimes.neu-box-runtime
 # 用户在维护窗口确认现有容器后，手动重启 dockerd
 docker ps
 sudo systemctl restart docker
@@ -84,8 +84,9 @@ curl -fsS http://127.0.0.1:59075/healthz
 sudo neuboxctl test            # 维护窗口内：真实任务与设备的实机验收
 ```
 
-`neuboxctl setup` 迁移并检查数据库，以暂停状态启动 Worker；Worker 加载
-BPF，通过健康检查后恢复调度。默认等待启动 60 秒，可用 `--timeout` 调整。
+`neuboxctl setup` 生成或迁移 runtime 配置，迁移并检查数据库，以暂停状态启动
+Worker；Worker 加载 BPF，通过健康检查后恢复调度。默认等待启动 60 秒，可用
+`--timeout` 调整。
 Worker 默认监听 `0.0.0.0:59075`，运维入口是 `/usr/sbin/neuboxctl`；
 客户端是 `/usr/local/bin/neubox`。RPM 不改 `daemon.json`，也不重启 Docker；
 应将 `default-runtime` 设为 `neu-box-runtime`，将
@@ -124,7 +125,6 @@ systemd 拒绝，因为直接停服务会跳过排空、备份和旧 BPF 清理�
 ```bash
 sudo neuboxctl pause
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
 sudo neuboxctl setup
 ```
 

@@ -10,7 +10,7 @@
 |---|---|
 | `neu-box-runtime` | runc wrapper，占 Docker `default-runtime` 的位置：给带 annotation 的容器注入 hook，其余 argv 原样转发给真 runc |
 | `neu-box-hook` | OCI hook：在容器 ENTRYPOINT 之前向 Worker 登记；登记失败或 Worker 不可达时拒绝受管容器启动 |
-| `neu-box-config` | 生成/迁移 `/etc/neu-box/runtime.env` |
+| `neu-box-config` | 由 `neuboxctl setup` 调用，生成/迁移 `/etc/neu-box/runtime.env`；也可检查生效值 |
 
 行为契约、hook phase 验证记录、边界 → [`docs/runtime-hook.md`](docs/runtime-hook.md)
 构建与打包细节 → [`docs/packaging.md`](docs/packaging.md)
@@ -21,7 +21,9 @@
 ```bash
 # 单个 RPM 安装 Worker、client、runtime 的程序文件
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
+sudoedit /etc/neu-box/worker.env  # 如需修改 Worker 监听端口或设备配置
+sudo neuboxctl setup
+sudo neu-box-config show
 sudoedit /etc/docker/daemon.json  # 手动合并 default-runtime 和 runtimes.neu-box-runtime
 
 # 必须重启 dockerd：会杀掉这台机器上当时所有运行中的容器，进维护窗口做
@@ -41,7 +43,6 @@ docker info --format '{{.DefaultRuntime}}'   # 应当输出 neu-box-runtime
 ```bash
 sudo neuboxctl pause
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudo neu-box-config init --real-runc "$(command -v runc)" --worker-url http://127.0.0.1:59075
 sudo neuboxctl setup
 ```
 
@@ -60,8 +61,9 @@ sudo dnf remove neuboxd
 
 ## 配置
 
-`/etc/neu-box/runtime.env`，由 `neu-box-config` 生成和迁移。生成之后照常手改 ——
-你改过的值会被保留；从零手写、不带 `NEU_BOX_CONFIG_VERSION` 的文件不参与迁移。
+`/etc/neu-box/runtime.env` 由 `neuboxctl setup` 调用 `neu-box-config` 生成和迁移。
+除 `NEU_BOX_WORKER_URL` 每次按 Worker 的 `NEU_BOX_PORT` 同步外，手工改过的值会
+保留；没有 `NEU_BOX_CONFIG_VERSION` 的文件按配置 schema 版本 0 迁移。
 
 | 键 | 默认值 | 说明 |
 |---|---|---|
@@ -72,35 +74,27 @@ sudo dnf remove neuboxd
 
 ```bash
 neu-box-config show      # 生效值 + 每个值的来源（file / env / default）
-neu-box-config init ...  # 手动生成 / 迁移
 neu-box-config version   # 软件版本 + 它支持的配置 schema 版本
 ```
 
 两个值需要和这台机器对上：
 
-- `NEU_BOX_WORKER_URL` 的端口跟 worker 的 `NEU_BOX_PORT` 一致。执行
-  `neu-box-config init --worker-url` 时由用户填写。
-- `NEU_BOX_REAL_RUNC` 指向本机真正的 runc。执行
-  `neu-box-config init --real-runc "$(command -v runc)"` 时由用户确认路径。
+- `NEU_BOX_WORKER_URL` 的端口跟 Worker 的 `NEU_BOX_PORT` 一致，`neuboxctl setup`
+  每次同步它。
+- `NEU_BOX_REAL_RUNC` 指向本机真正的 runc。`setup` 从 `PATH` 查找；若 Docker
+  已安装但找不到 runc，执行 `sudo neuboxctl setup --real-runc /实际路径`。
 
-## 手工安装和调试
+## 安装检查和调试
 
-不用脚本时，按这四步做：
+安装单个 RPM 后运行 `sudo neuboxctl setup`。修改 `/etc/neu-box/worker.env` 的
+`NEU_BOX_PORT` 后，先用 `neuboxctl pause` 停止运行中的 Worker，再运行 `setup`，
+让 runtime 的 Worker 地址保持一致。
+容器场景中，备份并手动修改 `/etc/docker/daemon.json`，加入 `default-runtime` 和
+`runtimes["neu-box-runtime"]` 两个键，内容见[部署手册](../../docs/deployment.md)。
+随后在维护窗口手动重启 dockerd。
 
-1. 把三个二进制装到 `/usr/local/bin`（`dnf install` 包，或照
-   [`docs/packaging.md`](docs/packaging.md) 自己编）。
-2. 生成配置：
-
-   ```bash
-   sudo neu-box-config init \
-       --real-runc "$(command -v runc)" \
-       --worker-url "http://127.0.0.1:<worker 的 NEU_BOX_PORT>"
-   ```
-
-3. 备份后改 `/etc/docker/daemon.json`：加 `default-runtime` 和
-   `runtimes["neu-box-runtime"]` 两个键，内容见
-   [`docs/runtime-hook.md`](docs/runtime-hook.md)（以那份为准）。
-4. 重启 dockerd。
+`neu-box-config init` 保留给需要单独调试 runtime 配置的维护者；正常安装和升级
+只需运行 `neuboxctl setup`。
 
 看现状：
 
