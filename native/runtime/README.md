@@ -21,13 +21,13 @@
 # 单个 RPM 安装 Worker、client、runtime 的程序文件
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env  # RPM 已安装默认配置；按需修改
-sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup
+sudo /usr/libexec/neu-box/bin/neuboxctl setup
 docker info --format '{{.DefaultRuntime}}'   # 应当输出 neu-box-runtime
 ```
 
 单个 RPM 用仓库根的 `deploy/build_release.py` 构建。`setup` 会自动合并
 `daemon.json`，需要重启时询问 `y/N`；选择 N 后按提示手动重启 Docker 并运行
-`sudo /usr/libexec/neu-box/neuboxctl/neuboxctl resume`。详见 [部署手册](../../docs/deployment.md)。
+`sudo /usr/libexec/neu-box/bin/neuboxctl resume`。详见 [部署手册](../../docs/deployment.md)。
 `setup` 会打印实际使用的 Worker URL、hook 路径和 runc 路径；配置文件位于
 `/etc/neu-box/runtime.env`。
 
@@ -36,9 +36,9 @@ docker info --format '{{.DefaultRuntime}}'   # 应当输出 neu-box-runtime
 升级同样只装一个包：
 
 ```bash
-sudo /usr/libexec/neu-box/neuboxctl/neuboxctl pause
+sudo /usr/libexec/neu-box/bin/neuboxctl pause
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup
+sudo /usr/libexec/neu-box/bin/neuboxctl setup
 ```
 
 Docker 未加载目标配置时，`setup` 会询问是否重启。
@@ -46,7 +46,7 @@ Docker 未加载目标配置时，`setup` 会询问是否重启。
 ## 卸载
 
 ```bash
-sudo /usr/libexec/neu-box/neuboxctl/neuboxctl pause
+sudo /usr/libexec/neu-box/bin/neuboxctl pause
 sudoedit /etc/docker/daemon.json  # 手动移除 default-runtime 和 runtimes.neu-box-runtime
 sudo systemctl restart docker
 sudo dnf remove neuboxd
@@ -73,11 +73,11 @@ sudo dnf remove neuboxd
 - `NEU_BOX_WORKER_URL` 的端口跟 Worker 的 `NEU_BOX_PORT` 一致，`neuboxctl setup`
   每次同步它。
 - `NEU_BOX_REAL_RUNC` 指向本机真正的 runc。`setup` 自动查找；若 Docker
-  已安装但找不到 runc，执行 `sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup --real-runc /实际路径`。
+  已安装但找不到 runc，执行 `sudo /usr/libexec/neu-box/bin/neuboxctl setup --real-runc /实际路径`。
 
 ## 安装检查和调试
 
-安装单个 RPM 后运行 `sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup`。修改 `/etc/neu-box/worker.env` 的
+安装单个 RPM 后运行 `sudo /usr/libexec/neu-box/bin/neuboxctl setup`。修改 `/etc/neu-box/worker.env` 的
 `NEU_BOX_PORT` 后，先用 `neuboxctl pause` 停止运行中的 Worker，再运行 `setup`，
 让 runtime 的 Worker 地址保持一致。
 容器场景中，`setup` 备份并校验 `/etc/docker/daemon.json`，合并
@@ -90,5 +90,5 @@ sudo dnf remove neuboxd
 |---|---|
 | 这台机器上所有容器都起不来 | 查看 `/etc/neu-box/runtime.env` 的 `NEU_BOX_REAL_RUNC` 是否指向本机真正的 runc |
 | 容器起得来，但里面设备全被拒 | 登记没成功。hook 的失败原因在 runc 的 stderr，也就是 `journalctl -u docker` |
-| `docker info` 里的 DefaultRuntime 不对 | 查看 `setup` 提示，重启 Docker 后运行 `sudo /usr/libexec/neu-box/neuboxctl/neuboxctl resume` |
+| `docker info` 里的 DefaultRuntime 不对 | 查看 `setup` 提示，重启 Docker 后运行 `sudo /usr/libexec/neu-box/bin/neuboxctl resume` |
 | 想退回原生 runc | 手动移除 `daemon.json` 中 Neu Box 的两个键，再手动重启 dockerd |

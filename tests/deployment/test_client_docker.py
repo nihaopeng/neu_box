@@ -485,7 +485,7 @@ def test_client_docker_start_without_a_sandbox_is_rejected(
         pytest.fail(
             "前置缺失：跑验收的进程自己就在沙盒 "
             f"{caller['sandbox_name']} 里，测不了'不在沙盒里'的分支；"
-            "请从不在沙盒里的 shell 执行 sudo /usr/libexec/neu-box/neuboxctl/neuboxctl test",
+            "请从不在沙盒里的 shell 执行 sudo /usr/libexec/neu-box/bin/neuboxctl test",
             pytrace=False,
         )
 

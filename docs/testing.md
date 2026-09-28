@@ -45,7 +45,7 @@ uv run --frozen --group build deploy/build_release.py
 ```bash
 docker image inspect alpine:3.20 your-ascend-image:tag
 sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/neuboxctl/neuboxctl test
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/bin/neuboxctl test
 ```
 
 套件还验证真实 `neubox submit --script`：文件脚本在提交时保存快照、stdin 脚本

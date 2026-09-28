@@ -549,10 +549,11 @@ def _compose_source(args: argparse.Namespace, topdir: Path) -> tuple[Path, Path]
         args.worker_bundle,
         rootfs / "usr" / "libexec" / "neu-box" / "neuboxd",
     )
-    _copy_tree(
-        args.ctl_bundle,
-        rootfs / "usr" / "libexec" / "neu-box" / "neuboxctl",
-    )
+    private_root = rootfs / "usr" / "libexec" / "neu-box"
+    _copy_tree(args.ctl_bundle, private_root / "ctl")
+    private_bin = private_root / "bin"
+    private_bin.mkdir(parents=True, exist_ok=True)
+    (private_bin / "neuboxctl").symlink_to("../ctl/neuboxctl")
     _copy_file(
         args.sandbox_executable,
         rootfs / "usr" / "libexec" / "neu-box" / "neu-box-sandbox",

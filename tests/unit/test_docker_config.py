@@ -74,7 +74,7 @@ def test_deferred_restart_leaves_worker_paused_and_resume_checks_live_docker(
     assert plan is not None and plan.content is None
     monkeypatch.setattr(docker_config, "_runtime_active", lambda _plan: False)
     assert docker_config.activate_docker_config(plan, restart=False) is False
-    assert "sudo /usr/libexec/neu-box/neuboxctl/neuboxctl resume" in capsys.readouterr().out
+    assert "sudo /usr/libexec/neu-box/bin/neuboxctl resume" in capsys.readouterr().out
     with pytest.raises(RuntimeError, match="尚未加载"):
         docker_config.verify_docker_ready(config)
     monkeypatch.setattr(docker_config, "_runtime_active", lambda _plan: True)

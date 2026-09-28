@@ -40,7 +40,7 @@ DEFAULT_CONFIG = "/etc/neu-box/worker.env"
 DEFAULT_MANIFEST = "/usr/share/neu-box/manifest.json"
 DEFAULT_SERVICE = "neuboxd.service"
 # 起服走私有管理入口；RPM 不向 PATH 安装管理命令。
-DEFAULT_CTL = "/usr/libexec/neu-box/neuboxctl/neuboxctl"
+DEFAULT_CTL = "/usr/libexec/neu-box/bin/neuboxctl"
 DEFAULT_DEVICE_FILTER = "davinci[0-9]+"
 DEFAULT_REAPER_INTERVAL = 30.0
 

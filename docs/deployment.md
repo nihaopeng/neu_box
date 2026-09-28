@@ -6,19 +6,22 @@
 # 首次安装：一个 RPM 安装 Worker、client 与 runtime 的程序文件
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudoedit /etc/neu-box/worker.env          # RPM 已装默认配置，按节点需要修改
-sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup                     # 配置 runtime 与 Docker、迁移数据库、启动 Worker
+sudo /usr/libexec/neu-box/bin/neuboxctl setup                     # 配置 runtime 与 Docker、迁移数据库、启动 Worker
 docker info --format '{{.DefaultRuntime}}'  # 应为 neu-box-runtime
 curl -fsS http://127.0.0.1:59075/healthz
 sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/neuboxctl/neuboxctl test
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/bin/neuboxctl test
 
 # 升级：先 pause，再装同一个包、迁移配置、setup、验收
-sudo /usr/libexec/neu-box/neuboxctl/neuboxctl pause
+sudo /usr/libexec/neu-box/bin/neuboxctl pause
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup
+sudo /usr/libexec/neu-box/bin/neuboxctl setup
 sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/neuboxctl/neuboxctl test
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/bin/neuboxctl test
 ```
+
+从 `0.5.0-15` 升级到首次采用新入口的版本时，安装前仍需使用已安装版本的
+`sudo /usr/libexec/neu-box/neuboxctl/neuboxctl pause`；安装完成后改用上面的新路径执行 `setup`。
 
 `pause` 是升级前必须执行的停服路径：排空任务和沙盒、备份数据库和配置、清理旧 BPF pins 后停止 Worker；`setup` 是唯一启动路径：迁移旧配置和 SQLite schema，加载新版 BPF，`/healthz` 通过后恢复调度。启动和停止统一走 `neuboxctl setup` / `pause`，只读观察使用 `systemctl status`、`journalctl`；等待超时可用 `--timeout <秒>` 调整。
 
@@ -28,7 +31,7 @@ runtime 配置备份以 `.runtime.env` 结尾。
 `setup` 从 `worker.env` 的 `NEU_BOX_PORT` 配置 runtime 的 Worker 地址，并生成或迁移
 `/etc/neu-box/runtime.env`。它默认自动查找本机 runc；若找不到，
 或需要显式选择另一个 runtime，使用
-`sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup --real-runc /实际路径`。没有 Docker 的宿主机任务节点可以直接
+`sudo /usr/libexec/neu-box/bin/neuboxctl setup --real-runc /实际路径`。没有 Docker 的宿主机任务节点可以直接
 运行 `setup`。`setup` 每次都会同步 Worker 地址；runtime 的其他手工配置保持不变。
 `setup` 会打印实际使用的 Worker URL、hook 和 runc 路径；需要检查文件内容时，
 查看 `/etc/neu-box/runtime.env`。RPM 安装脚本不编辑 Docker 配置、不启动 Worker、
@@ -51,7 +54,7 @@ runtime 配置备份以 `.runtime.env` 结尾。
 则等待 Docker 启动、验证默认运行时，再恢复 Worker 调度；选 N 则退出并保持 Worker
 暂停。此时在维护窗口手动运行 `sudo systemctl restart docker`，确认
 `docker info --format '{{.DefaultRuntime}}'` 输出 `neu-box-runtime`，最后运行
-`sudo /usr/libexec/neu-box/neuboxctl/neuboxctl resume`。非交互环境默认选择 N；可用 `--restart-docker` 自动重启。
+`sudo /usr/libexec/neu-box/bin/neuboxctl resume`。非交互环境默认选择 N；可用 `--restart-docker` 自动重启。
 Docker 重启可能停止当前运行的容器，请先检查 `docker ps`。
 
 ## API 与实机验收
@@ -68,7 +71,7 @@ Docker 重启可能停止当前运行的容器，请先检查 `docker ps`。
 ```bash
 docker image inspect alpine:3.20 your-ascend-image:tag
 sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/neuboxctl/neuboxctl test
+  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/bin/neuboxctl test
 ```
 
 将镜像名换成该节点实际安装的名称。套件还覆盖 CLI 的
@@ -180,7 +183,8 @@ build/release/pyinstaller-dist/neu-box-deployment-tests/neu-box-deployment-tests
 ```shell
 # 程序文件：RPM 安装和管理，不迁移
 /usr/libexec/neu-box/neuboxd/                   neuboxd daemon bundle
-/usr/libexec/neu-box/neuboxctl/                 neuboxctl 管理 CLI bundle
+/usr/libexec/neu-box/ctl/                       neuboxctl 管理 CLI bundle
+/usr/libexec/neu-box/bin/neuboxctl             私有管理命令入口
 /usr/libexec/neu-box/device_block.o             预编译 BPF object
 /usr/libexec/neu-box/neu-box-sandbox            native sandbox
 /usr/local/bin/neubox                            Go client，唯一公开命令

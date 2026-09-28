@@ -53,7 +53,7 @@ def _worker_ready(url: str) -> bool:
         reason = str(exc)
     print(
         f"实机验收未开始：Worker 健康检查失败（{endpoint}）：{reason}\n"
-        "先执行 sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup，"
+        "先执行 sudo /usr/libexec/neu-box/bin/neuboxctl setup，"
         "确认 /healthz 可访问，再运行 test。",
         file=sys.stderr,
     )

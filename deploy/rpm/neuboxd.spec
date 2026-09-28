@@ -17,8 +17,8 @@ Requires:       systemd
 # private copies as system capabilities or turn their internal edges into host
 # dependencies. Keep automatic discovery enabled for the top-level bootloaders,
 # native sandbox, and the rest of the package.
-%global __provides_exclude_from ^%{_libexecdir}/neu-box/(neuboxd|neuboxctl|tests)/_internal/.*\\.so.*$
-%global __requires_exclude_from ^%{_libexecdir}/neu-box/(neuboxd|neuboxctl|tests)/_internal/.*$
+%global __provides_exclude_from ^%{_libexecdir}/neu-box/(neuboxd|ctl|tests)/_internal/.*\\.so.*$
+%global __requires_exclude_from ^%{_libexecdir}/neu-box/(neuboxd|ctl|tests)/_internal/.*$
 
 # The worker and sandbox are already-built release artifacts.  Keep this RPM
 # as their owner instead of rebuilding them in a package scriptlet.
@@ -46,7 +46,9 @@ test -x %{buildroot}%{_libexecdir}/neu-box/neuboxd/neuboxd
 test -x %{buildroot}/usr/local/bin/neubox
 test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-runtime
 test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-hook
-test -x %{buildroot}%{_libexecdir}/neu-box/neuboxctl/neuboxctl
+test -x %{buildroot}%{_libexecdir}/neu-box/ctl/neuboxctl
+test -L %{buildroot}%{_libexecdir}/neu-box/bin/neuboxctl
+test "$(readlink %{buildroot}%{_libexecdir}/neu-box/bin/neuboxctl)" = ../ctl/neuboxctl
 test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-sandbox
 test -f %{buildroot}%{_libexecdir}/neu-box/device_block.o
 test -x %{buildroot}%{_libexecdir}/neu-box/tests/neu-box-deployment-tests
@@ -64,7 +66,11 @@ test ! -e %{buildroot}%{_sysconfdir}/neu-box/runtime.env
 # import another bundled module after RPM has changed the files.
 if /usr/bin/systemctl is-active --quiet \
     neuboxd.service >/dev/null 2>&1; then
-    echo "neuboxd.service 正在运行；安装前请执行 '/usr/libexec/neu-box/neuboxctl/neuboxctl pause'" >&2
+    ctl=/usr/libexec/neu-box/bin/neuboxctl
+    if [ ! -x "$ctl" ]; then
+        ctl=/usr/libexec/neu-box/neuboxctl/neuboxctl
+    fi
+    echo "neuboxd.service 正在运行；安装前请执行 '$ctl pause'" >&2
     exit 1
 fi
 
@@ -81,9 +87,8 @@ cat <<'EOF'
  Neu Box 安装完成
 ----------------------------------------------------------------
  配置  /etc/neu-box/worker.env（升级时保留现有配置）
- 启用  sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup
-       setup 将配置 Docker；需要重启时会征询用户。
- 验收  sudo /usr/libexec/neu-box/neuboxctl/neuboxctl test
+ 启用  sudo /usr/libexec/neu-box/bin/neuboxctl setup
+ 验收  sudo /usr/libexec/neu-box/bin/neuboxctl test
        Ascend 隔离测试需设置 NEU_BOX_DRIVER_PROBE_IMAGE。
  文档  rpm -qd neuboxd
 ================================================================
@@ -98,7 +103,7 @@ if [ "$1" -eq 0 ]; then
     fi
     if /usr/bin/systemctl is-active --quiet \
         neuboxd.service >/dev/null 2>&1; then
-        echo "neuboxd.service 正在运行；卸载前请执行 '/usr/libexec/neu-box/neuboxctl/neuboxctl pause'" >&2
+        echo "neuboxd.service 正在运行；卸载前请执行 '/usr/libexec/neu-box/bin/neuboxctl pause'" >&2
         exit 1
     fi
     /usr/bin/systemctl disable neuboxd.service >/dev/null 2>&1 || :
@@ -117,7 +122,9 @@ fi
 %attr(0755,root,root) %{_libexecdir}/neu-box/neu-box-runtime
 %attr(0755,root,root) %{_libexecdir}/neu-box/neu-box-hook
 %{_libexecdir}/neu-box/neuboxd
-%{_libexecdir}/neu-box/neuboxctl
+%{_libexecdir}/neu-box/ctl
+%dir %{_libexecdir}/neu-box/bin
+%{_libexecdir}/neu-box/bin/neuboxctl
 %attr(0755,root,root) %{_libexecdir}/neu-box/neu-box-sandbox
 %attr(0644,root,root) %{_libexecdir}/neu-box/device_block.o
 %dir %{_libexecdir}/neu-box/tests
