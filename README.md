@@ -73,27 +73,25 @@ Neu Box 由本仓库和 WebUI 仓库组成：
 
 ```bash
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudoedit /etc/neu-box/worker.env
+sudoedit /etc/neu-box/worker.env  # RPM 已提供默认配置；按节点需要修改
 sudo neuboxctl setup
-sudo neu-box-config show       # 可选：检查 setup 生成的 runtime 配置
-sudoedit /etc/docker/daemon.json  # 容器场景：手动设置 default-runtime / runtimes.neu-box-runtime
-# 用户在维护窗口确认现有容器后，手动重启 dockerd
-docker ps
-sudo systemctl restart docker
 curl -fsS http://127.0.0.1:59075/healthz
 # 维护窗口内：将示例镜像名换成本机已有的普通镜像和 Ascend 驱动探针镜像
 sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
   NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag neuboxctl test
 ```
 
-`neuboxctl setup` 生成或迁移 runtime 配置，迁移并检查数据库，以暂停状态启动
-Worker；Worker 加载 BPF，通过健康检查后恢复调度。默认等待启动 60 秒，可用
-`--timeout` 调整。
+`neuboxctl setup` 自动查找本机 runc，生成或迁移 runtime 配置，迁移并检查数据库，以暂停状态启动
+Worker；同时合并并校验 Docker 配置。需要重启 Docker 时会询问 `y/N`，选 Y 则等待 Docker
+启动并恢复调度；选 N 则让 Worker 保持暂停，按提示手动重启 Docker 后运行
+`sudo neuboxctl resume`。默认等待 Worker 启动 60 秒，可用
+`--timeout` 调整。仅当自动查找不到 runc，或需要指定另一实现时，
+才使用 `sudo neuboxctl setup --real-runc /实际路径`；生成的配置可查看
+`/etc/neu-box/runtime.env`。
 Worker 默认监听 `0.0.0.0:59075`，运维入口是 `/usr/sbin/neuboxctl`；
-客户端是 `/usr/local/bin/neubox`。RPM 不改 `daemon.json`，也不重启 Docker；
-应将 `default-runtime` 设为 `neu-box-runtime`，将
-`runtimes.neu-box-runtime.path` 设为 `/usr/local/bin/neu-box-runtime`。完整 JSON
-示例和检查命令见 [部署手册](docs/deployment.md)。
+客户端是 `/usr/local/bin/neubox`。RPM 安装脚本不改 `daemon.json`；`setup` 在安装后
+设置 `default-runtime` 和 `runtimes.neu-box-runtime.path`。非交互环境默认暂缓重启，
+可用 `sudo neuboxctl setup --restart-docker` 自动完成。详见 [部署手册](docs/deployment.md)。
 
 `setup` 通过后跑 `neuboxctl test` 做验收：套件随 RPM 安装在
 `/usr/libexec/neu-box/tests/`，是一个自带 pytest 的 PyInstaller 产物（部署机不需要
@@ -176,7 +174,7 @@ neubox docker status my-container
 neubox docker restart my-container
 ```
 
-完整参数见 [客户端说明](client/neubox/README.md)。
+完整参数见 [客户端说明](native/client/README.md)。
 
 ## HTTP API
 
@@ -257,8 +255,8 @@ uv run --frozen python tests/deployment/run.py --url http://127.0.0.1:59075
 
 ```text
 src/neu_box/          Worker 应用、任务执行、沙盒与设备管理
-client/neubox/        Go 命令行客户端
-runtime/neubox/       Go OCI runtime、hook、配置工具及 RPM
+native/client/        Go 命令行客户端
+native/runtime/       Go OCI runtime 与 hook
 native/sandbox/       C++17 沙盒 CLI、libbpf 用户态实现与 BPF 源码
 deploy/               RPM 构建、配置和 systemd unit
 docs/                 API、部署、配置、测试与数据库迁移文档
@@ -270,10 +268,11 @@ thirds/webui/         WebUI submodule
 | 文档 | 内容 |
 |---|---|
 | [部署与升级手册](docs/deployment.md) | RPM 安装、升级、权限与日志 |
+| [提交接口设计](docs/submit-interface-design.md) | 终端、容器与 submit 的交互约定 |
 | [Worker 配置](docs/configuration.md) | `worker.env` 变量、旧键迁移与生效方式 |
 | [Worker 测试](docs/testing.md) | 单元、集成、native 与发布前测试 |
 | [Worker HTTP API](docs/worker-api.md) | API v2 契约、任务、日志和终端沙盒 |
-| [容器归属登记](docs/container-registration.md) | `/container/register` 的 Worker 侧流程、锁序与失败语义；runtime 侧见 [runtime hook](runtime/neubox/docs/runtime-hook.md) |
+| [容器归属登记](docs/container-registration.md) | `/container/register` 的 Worker 侧流程、锁序与失败语义；runtime 侧见 [runtime hook](native/runtime/docs/runtime-hook.md) |
 | [设备隔离原理](docs/isolation.md) | 预留表 / mnt ns 委托 / 驱动 UDA 表三层怎么合起来保证隔离，以及 release、exec、stop→start 各条路径的结论 |
 | [数据库迁移手册](docs/database-migrations.md) | Schema 版本、迁移开发与部署检查 |
 

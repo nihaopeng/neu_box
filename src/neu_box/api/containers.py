@@ -12,7 +12,7 @@ values directly from ``/proc``.
 The endpoint is the Worker half of the runtime contract: the wire format is
 frozen in ``docs/worker-api.md``, the Worker-side flow is in
 ``docs/container-registration.md``, and the runtime half (wrapper, hook) lives
-in ``runtime/neubox``.
+in ``native/runtime``.
 """
 
 from __future__ import annotations

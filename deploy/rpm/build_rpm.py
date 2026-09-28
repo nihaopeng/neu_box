@@ -366,13 +366,13 @@ def _parser() -> argparse.ArgumentParser:
         "--client-executable",
         type=_path,
         default=DEFAULT_BUILD / "client" / "neubox",
-        help="prebuilt Go client from client/neubox",
+        help="prebuilt Go client from native/client",
     )
     parser.add_argument(
         "--runtime-bin-dir",
         type=_path,
         default=DEFAULT_BUILD / "runtime",
-        help="prebuilt Go runtime, hook, and config binaries",
+        help="prebuilt Go OCI runtime and hook binaries",
     )
     parser.add_argument(
         "--info-dir",
@@ -501,21 +501,12 @@ def _validate_args(args: argparse.Namespace) -> None:
             f"Version {args.version!r}"
         )
     _require_dir(args.runtime_bin_dir, "OCI runtime binary directory")
-    for name in ("neu-box-runtime", "neu-box-hook", "neu-box-config"):
+    for name in ("neu-box-runtime", "neu-box-hook"):
         binary = args.runtime_bin_dir / name
         _require_file(binary, name, executable=True)
         headers = _elf_headers(binary, name)
         if headers.get("Machine") != _expected_elf_machine():
             raise SystemExit(f"{name} architecture does not match the RPM")
-    config_version = _capture(
-        [str(args.runtime_bin_dir / "neu-box-config"), "version"],
-        "checking OCI runtime version",
-    ).strip()
-    if not config_version.startswith(f"neu-box-config {args.version}（"):
-        raise SystemExit(
-            f"OCI runtime version {config_version!r} does not match RPM "
-            f"Version {args.version!r}"
-        )
     _require_dir(args.info_dir, "device info script directory")
     info_scripts = list(args.info_dir.glob("*_info.sh"))
     if not info_scripts:
@@ -523,8 +514,8 @@ def _validate_args(args: argparse.Namespace) -> None:
     _require_file(args.config, "Worker configuration")
     _require_file(args.unit, "systemd unit")
     _require_file(
-        ROOT / "runtime" / "neubox" / "deploy" / "config"
-        / "runtime.env.example", "runtime configuration example",
+        ROOT / "deploy" / "config" / "runtime.env.example",
+        "runtime configuration example",
     )
     _require_dir(args.ctl_bundle, "PyInstaller management CLI bundle")
     ctl = args.ctl_bundle / "neuboxctl"
@@ -575,15 +566,14 @@ def _compose_source(args: argparse.Namespace, topdir: Path) -> tuple[Path, Path]
     client = rootfs / "usr" / "local" / "bin" / "neubox"
     _copy_file(args.client_executable, client, 0o755)
     (client.parent / "neu-sbox").symlink_to("neubox")
-    for runtime_name in ("neu-box-runtime", "neu-box-hook", "neu-box-config"):
+    for runtime_name in ("neu-box-runtime", "neu-box-hook"):
         _copy_file(
             args.runtime_bin_dir / runtime_name,
             client.parent / runtime_name,
             0o755,
         )
     _copy_file(
-        ROOT / "runtime" / "neubox" / "deploy" / "config"
-        / "runtime.env.example",
+        ROOT / "deploy" / "config" / "runtime.env.example",
         rootfs / "usr" / "share" / "neu-box" / "runtime.env.example",
         0o644,
     )

@@ -44,6 +44,19 @@ make -C native/sandbox BUILD_DIR="$PWD/build/native-sandbox" test
 `pkg-config` 和 libbpf 1.0+ 开发包。RPM 会根据 native CLI 的 ELF
 依赖自动生成目标机 libbpf Requires。
 
+### 格式化与静态检查
+
+`native/sandbox/.clang-format` 以 LLVM 风格为基础，使用项目的 4 空格缩进、
+左侧指针、同一行大括号和 100 列宽。`native/sandbox/.clang-tidy` 开启
+`modernize-use-trailing-return-type`。开发时可运行：
+
+```bash
+make -C native/sandbox format
+make -C native/sandbox lint
+```
+
+`clang-format` 和 `clang-tidy` 只用于开发检查，不打进 RPM。
+
 ## 目标节点要求
 
 生产 RPM 的目标节点需要：

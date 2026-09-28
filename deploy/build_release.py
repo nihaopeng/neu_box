@@ -37,7 +37,7 @@ def _version() -> str:
 
 
 def _build_client(build_dir: Path, version: str) -> Path:
-    source = ROOT / "client" / "neubox"
+    source = ROOT / "native" / "client"
     if not (source / "go.mod").is_file():
         raise SystemExit(f"missing client source: {source}")
     go = shutil.which("go")
@@ -58,7 +58,7 @@ def _build_client(build_dir: Path, version: str) -> Path:
         "GOTOOLCHAIN": "local",
         "GOCACHE": str(build_dir / "go-cache"),
     })
-    symbol = "github.com/neusbox/neu_box/client/neubox/internal/cli.version"
+    symbol = "github.com/neusbox/neu_box/native/client/internal/cli.version"
     _run([
         go, "build", "-trimpath", "-buildvcs=false", "-tags=netgo,osusergo",
         "-ldflags", f"-s -w -X {symbol}={version}",
@@ -68,8 +68,8 @@ def _build_client(build_dir: Path, version: str) -> Path:
     return binary
 
 
-def _build_runtime(build_dir: Path, version: str) -> Path:
-    source = ROOT / "runtime" / "neubox"
+def _build_runtime(build_dir: Path) -> Path:
+    source = ROOT / "native" / "runtime"
     if not (source / "go.mod").is_file():
         raise SystemExit(f"missing OCI runtime source: {source}")
     go = shutil.which("go")
@@ -89,14 +89,13 @@ def _build_runtime(build_dir: Path, version: str) -> Path:
         "GOTOOLCHAIN": "local",
         "GOCACHE": str(build_dir / "go-cache"),
     })
-    for component in ("runtime", "hook", "config"):
+    for component in ("runtime", "hook"):
         _run([
             go, "build", "-trimpath", "-buildvcs=false",
-            "-ldflags", f"-s -w -X main.version={version}",
+            "-ldflags", "-s -w",
             "-o", str(build_dir / f"neu-box-{component}"),
             f"./cmd/neu-{component}",
         ], cwd=source, env=environment)
-    _run([str(build_dir / "neu-box-config"), "version"])
     return build_dir
 
 
@@ -210,7 +209,7 @@ def main() -> int:
         pyinstaller_dist, pyinstaller_work / "deployment-tests",
     )
     client_binary = _build_client(BUILD_ROOT / "client", version)
-    runtime_bin_dir = _build_runtime(BUILD_ROOT / "runtime", version)
+    runtime_bin_dir = _build_runtime(BUILD_ROOT / "runtime")
 
     command = [
         sys.executable,

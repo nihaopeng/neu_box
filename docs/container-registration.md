@@ -9,8 +9,8 @@
 |---|---|
 | 隔离为什么成立：预留表、mnt ns 委托、驱动 UDA 表三层怎么配合，release / exec / stop→start 各条路径的结论 | [`isolation.md`](isolation.md) |
 | 端点契约：请求字段、状态码、错误码、幂等语义 | [`worker-api.md`](worker-api.md)「登记容器归属（runtime hook 专用）」—— **接口以那边为准**，本文不重复字段表 |
-| runtime 侧怎么做：wrapper 怎么注入、hook 怎么读 OCI state、`daemon.json` / `runtime.env` 怎么配、装机顺序为什么是硬的 | `runtime/neubox/docs/runtime-hook.md` |
-| 客户端 `neu-sbox` 怎么用、annotation 是谁拼的 | `client/neubox/README.md` |
+| runtime 侧怎么做：wrapper 怎么注入、hook 怎么读 OCI state、`daemon.json` / `runtime.env` 怎么配、装机顺序为什么是硬的 | `native/runtime/docs/runtime-hook.md` |
+| 客户端 `neu-sbox` 怎么用、annotation 是谁拼的 | `native/client/README.md` |
 
 这是一条**跨仓库链路**：运行时的身份由 runtime 侧采集，授权判断和落库全在 Worker。
 改协议字段之前先确认三边都能跟上，单边改动等于 break。
@@ -54,7 +54,7 @@ docker run --annotation sandbox_cgroup=<name> ...      ← 客户端 / 用户
 
 **Worker 是唯一写 BPF map 和数据库的人。** runtime 和 hook 不碰 BPF，只负责把
 可信的运行时身份转交给 Worker。请求怎么发、超时多长、失败时 hook 退什么码，
-都是 runtime 侧的事，见 `runtime/neubox/docs/runtime-hook.md`。
+都是 runtime 侧的事，见 `native/runtime/docs/runtime-hook.md`。
 
 ## annotation
 
@@ -161,7 +161,7 @@ ENTRYPOINT 还没跑）。
 这也是"**拿不到授权答案就绝不放行**"的理由：放行 = 容器带着一张空 UDA 表
 永久坏掉，而用户还以为"驱动装了没生效"。Worker 明确回答"没有这个沙盒 /
 正在销毁"时也必须让 hook 退非 0，阻止 `runc create`，要求用户重新取得沙盒
-并通过 `neubox docker start` 绑定。详见 `runtime/neubox/docs/runtime-hook.md`
+并通过 `neubox docker start` 绑定。详见 `native/runtime/docs/runtime-hook.md`
 与 [`isolation.md`](isolation.md)。
 
 ## Worker 侧必须做到的四条
@@ -190,7 +190,7 @@ ENTRYPOINT 还没跑）。
    并钉住 mnt ns fd 防 inum 回收 —— 沿用现有 `ContainerIdentity` 的做法。
 
    光有 mnt ns inum 分不清"同一个容器"和"回收后重用的号"，实测记录见
-   `runtime/neubox/docs/runtime-hook.md`「phase 验证记录」。
+   `native/runtime/docs/runtime-hook.md`「phase 验证记录」。
 
 ## 注销（没有端点）
 
@@ -241,7 +241,7 @@ runtime hook：沙盒还在就幂等登记，沙盒没了就 404、容器起不�
 - **Kubernetes。** 只做单节点。
 - **升级流程。** 本次是不兼容变更，升级路径另行处理。
 - **与 Ascend Docker Runtime 并存**（属 runtime 侧，见
-  `runtime/neubox/docs/runtime-hook.md`）。
+  `native/runtime/docs/runtime-hook.md`）。
 
 ## 已删除
 

@@ -16,6 +16,7 @@ from pathlib import Path
 from neu_box.config import env_int, load_role_environment, sandbox_executable_path
 from neu_box.maintenance.markers import clear_pause_marker
 from neu_box.maintenance.pause import SERVICE, control_worker, pause
+from neu_box.maintenance.docker_config import verify_docker_ready
 from neu_box.maintenance.setup import setup
 from neu_box.migrations.cli import add_database_commands, run_database_command
 from neu_box.storage import (
@@ -41,7 +42,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     setup_parser = commands.add_parser(
-        "setup", help="配置 OCI runtime、迁移数据库、启动并检查 Worker，然后恢复调度",
+        "setup", help="配置 OCI runtime 和 Docker、迁移数据库、启动 Worker 并恢复调度",
     )
     setup_parser.add_argument(
         "--timeout", type=int, default=60,
@@ -49,7 +50,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     setup_parser.add_argument(
         "--real-runc",
-        help="真实 runc 的路径；默认从 PATH 查找，容器节点可用此项指定自定义路径",
+        help="真实 runc 的路径；默认自动查找本机 runc，非标准路径时可指定",
+    )
+    setup_parser.add_argument(
+        "--restart-docker", action="store_true",
+        help="Docker 配置需要生效时自动重启；默认交互确认，非交互环境默认暂缓",
     )
 
     pause_parser = commands.add_parser(
@@ -79,6 +84,7 @@ def _parser() -> argparse.ArgumentParser:
 def _run_control(command: str, args: argparse.Namespace, config) -> int:
     if command == "resume":
         port = env_int("NEU_BOX_PORT", 59075)
+        verify_docker_ready()
         control_worker("resume", port)
         clear_pause_marker()
         return 0
@@ -88,7 +94,11 @@ def _run_control(command: str, args: argparse.Namespace, config) -> int:
     if command == "pause":
         pause(port, args.timeout, config)
     else:
-        setup(None, args.timeout, config, real_runc=args.real_runc)
+        complete = setup(
+            None, args.timeout, config, real_runc=args.real_runc,
+            restart_docker=True if args.restart_docker else None,
+        )
+        return 0 if complete else 2
     return 0
 
 

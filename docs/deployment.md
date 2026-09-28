@@ -5,13 +5,8 @@
 ```bash
 # 首次安装：一个 RPM 安装 Worker、client 与 runtime 的程序文件
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
-sudoedit /etc/neu-box/worker.env          # 手动配置监听地址、设备过滤器、设备状态脚本等
-sudo neuboxctl setup                     # 配置 runtime、迁移数据库并启动 Worker
-sudo neu-box-config show
-sudoedit /etc/docker/daemon.json         # 手动合并下方两个 Docker 配置键
-# 用户在维护窗口确认现有容器后，手动重启 Docker
-docker ps
-sudo systemctl restart docker
+sudoedit /etc/neu-box/worker.env          # RPM 已装默认配置，按节点需要修改
+sudo neuboxctl setup                     # 配置 runtime 与 Docker、迁移数据库、启动 Worker
 docker info --format '{{.DefaultRuntime}}'  # 应为 neu-box-runtime
 curl -fsS http://127.0.0.1:59075/healthz
 sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
@@ -31,14 +26,17 @@ sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
 runtime 配置备份以 `.runtime.env` 结尾。
 
 `setup` 从 `worker.env` 的 `NEU_BOX_PORT` 配置 runtime 的 Worker 地址，并生成或迁移
-`/etc/neu-box/runtime.env`。它会查找本机的 runc；若 Docker 已安装但找不到 runc，
-用 `sudo neuboxctl setup --real-runc /实际路径` 指定。没有 Docker 的宿主机任务节点
-可以直接运行 `setup`。`setup` 每次都会同步 Worker 地址；runtime 的其他手工配置
-保持不变。`neu-box-config show` 可检查最终生效值。RPM 自身不编辑 Docker 配置、
-不启动 Worker、不重启 dockerd。
+`/etc/neu-box/runtime.env`。它默认自动查找本机 runc；若找不到，
+或需要显式选择另一个 runtime，使用
+`sudo neuboxctl setup --real-runc /实际路径`。没有 Docker 的宿主机任务节点可以直接
+运行 `setup`。`setup` 每次都会同步 Worker 地址；runtime 的其他手工配置保持不变。
+`setup` 会打印实际使用的 Worker URL、hook 和 runc 路径；需要检查文件内容时，
+查看 `/etc/neu-box/runtime.env`。RPM 安装脚本不编辑 Docker 配置、不启动 Worker、
+不重启 dockerd；这些动作由显式的 `neuboxctl setup` 完成。
 
-用 `sudoedit /etc/docker/daemon.json` 将下面两个键**合并**进现有 JSON，保留原有
-键和值；如果文件不存在，创建包含这些键的 JSON 对象：
+`setup` 自动将下面两个键合并进 `/etc/docker/daemon.json`，保留其他键和值。
+写入前调用 `dockerd --validate`，并备份旧文件。没有 Docker 的节点跳过这一步。
+如果原本配置了其他默认运行时，`setup` 会停止并提示人工核对调用链：
 
 ```json
 {
@@ -49,10 +47,12 @@ runtime 配置备份以 `.runtime.env` 结尾。
 }
 ```
 
-保存后检查 JSON 格式（例如 `jq -e . /etc/docker/daemon.json`），由用户在维护窗口
-手动重启 dockerd，再用 `docker info --format '{{.DefaultRuntime}}'` 验证。升级时若
-Docker 配置没有变化，无需为替换 runtime 二进制而重启 dockerd；若改了配置，仍需
-安排手动重启。
+若 Docker 已加载该配置，`setup` 不重启。否则交互终端会询问是否重启 Docker：选 Y
+则等待 Docker 启动、验证默认运行时，再恢复 Worker 调度；选 N 则退出并保持 Worker
+暂停。此时在维护窗口手动运行 `sudo systemctl restart docker`，确认
+`docker info --format '{{.DefaultRuntime}}'` 输出 `neu-box-runtime`，最后运行
+`sudo neuboxctl resume`。非交互环境默认选择 N；可用 `--restart-docker` 自动重启。
+Docker 重启可能停止当前运行的容器，请先检查 `docker ps`。
 
 ## API 与实机验收
 
@@ -163,7 +163,7 @@ uv run --frozen --group build deploy/build_release.py
 ls -l dist/rpm/neuboxd-*.rpm
 
 rpm -qpi dist/rpm/neuboxd-*.rpm
-rpm -qpl dist/rpm/neuboxd-*.rpm | grep -E 'neuboxctl|neubox|neu-box-(runtime|hook|config|deployment-tests)'
+rpm -qpl dist/rpm/neuboxd-*.rpm | grep -E 'neuboxctl|neubox|neu-box-(runtime|hook|deployment-tests)'
 rpm -qpR dist/rpm/neuboxd-*.rpm
 ```
 
@@ -188,7 +188,6 @@ build/release/pyinstaller-dist/neu-box-deployment-tests/neu-box-deployment-tests
 /usr/local/bin/neubox                            Go client（neu-sbox 是符号链接）
 /usr/local/bin/neu-box-runtime                   OCI runtime wrapper
 /usr/local/bin/neu-box-hook                      OCI hook
-/usr/local/bin/neu-box-config                    runtime 配置工具
 /usr/lib/systemd/system/neuboxd.service         systemd unit
 
 # 配置：setup 迁移旧键；runtime 的 Worker URL 跟随 NEU_BOX_PORT

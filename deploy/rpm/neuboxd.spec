@@ -29,7 +29,7 @@ Requires:       systemd
 
 %description
 Neu Box runs accelerator jobs and enforces their device isolation. This RPM
-ships the Worker, neubox CLI, OCI runtime wrapper, hook, config tool, native
+ships the Worker, neubox CLI, OCI runtime wrapper, hook, native
 sandbox, BPF object, deployment tests, and systemd unit together.
 
 %prep
@@ -47,7 +47,6 @@ test -x %{buildroot}/usr/local/bin/neubox
 test -L %{buildroot}/usr/local/bin/neu-sbox
 test -x %{buildroot}/usr/local/bin/neu-box-runtime
 test -x %{buildroot}/usr/local/bin/neu-box-hook
-test -x %{buildroot}/usr/local/bin/neu-box-config
 test -x %{buildroot}%{_libexecdir}/neu-box/neuboxctl/neuboxctl
 test -x %{buildroot}%{_libexecdir}/neu-box/neu-box-sandbox
 test -f %{buildroot}%{_libexecdir}/neu-box/device_block.o
@@ -74,10 +73,9 @@ fi
 /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || :
 cat <<'EOF'
 Neu Box files installed:
-  1. Edit /etc/neu-box/worker.env and run sudo neuboxctl setup.
-     Setup also generates or migrates /etc/neu-box/runtime.env.
-  2. For Docker, add neu-box-runtime to /etc/docker/daemon.json and set
-     default-runtime. Restart dockerd manually in a maintenance window.
+  1. A default /etc/neu-box/worker.env is installed; edit it for this node.
+  2. Run sudo neuboxctl setup. It configures runtime.env and Docker, then
+     asks before restarting Docker if a restart is needed.
 See the deployment guide installed by this RPM (rpm -qd neuboxd).
 EOF
 
@@ -108,7 +106,6 @@ fi
 /usr/local/bin/neu-sbox
 %attr(0755,root,root) /usr/local/bin/neu-box-runtime
 %attr(0755,root,root) /usr/local/bin/neu-box-hook
-%attr(0755,root,root) /usr/local/bin/neu-box-config
 %dir %{_libexecdir}/neu-box
 %{_libexecdir}/neu-box/neuboxd
 %{_libexecdir}/neu-box/neuboxctl
