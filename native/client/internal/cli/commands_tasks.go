@@ -38,7 +38,7 @@ func parseTasksOptions(args []string) (tasksOptions, error) {
 			}
 			duration, err := time.ParseDuration(raw)
 			if err != nil || duration <= 0 {
-				return options, fmt.Errorf("--since 必须是正 duration，例如 30m / 6h: %q", raw)
+				return options, fmt.Errorf("--since 必须是正数时间间隔，例如 30m 或 6h：%q", raw)
 			}
 			options.since = duration
 		default:

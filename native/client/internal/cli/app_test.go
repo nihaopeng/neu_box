@@ -37,14 +37,24 @@ func TestHelpUsesReadableIndentation(t *testing.T) {
 	for _, expected := range []string{
 		"\n    neubox shell",
 		"\n    neubox acquire",
-		"\n    neubox [--json] docker restart",
-		"\n    neubox [--json] docker status",
-		"\n    --device ID",
-		"\n    list ",
-		"\n    NEU_BOX_URL",
+		"\n    neubox docker restart",
+		"\n    neubox docker status",
+		"\n    neubox help verbose",
 	} {
 		if !strings.Contains(out.String(), expected) {
 			t.Fatalf("missing %q in help:\n%s", expected, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "annotation") || strings.Contains(out.String(), "NEU_BOX_URL") {
+		t.Fatalf("默认帮助应仅保留常用命令: %s", out.String())
+	}
+	out.Reset()
+	if code := application.run([]string{"help", "verbose"}); code != 0 {
+		t.Fatalf("verbose exit=%d", code)
+	}
+	for _, expected := range []string{"--device ID", "NEU_BOX_URL", "neubox docker help verbose"} {
+		if !strings.Contains(out.String(), expected) {
+			t.Fatalf("详细帮助缺少 %q: %s", expected, out.String())
 		}
 	}
 }

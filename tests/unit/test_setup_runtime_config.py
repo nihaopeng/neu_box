@@ -240,7 +240,7 @@ def test_runc_cannot_resolve_to_neubox_wrapper(
     runc_symlink.symlink_to(wrapper)
     monkeypatch.setattr(runtime_config.shutil, "which", _which(runc=runc_symlink))
 
-    with pytest.raises(RuntimeError, match="递归调用"):
+    with pytest.raises(RuntimeError, match="不能指向 Neu Box 运行时自身"):
         setup.initialize_runtime_config(59075)
 
 
@@ -305,11 +305,11 @@ def test_setup_reports_effective_runtime_config(
     setup.setup(None, 5)
 
     output = capsys.readouterr().out
-    assert f"Runtime 配置: {tmp_path / 'runtime.env'}" in output
-    assert "Worker URL: http://127.0.0.1:59075" in output
-    assert "OCI hook:   /opt/hook" in output
-    assert "real runc:  /opt/runc" in output
-    assert "cap guard:  drop" in output
+    assert f"运行时配置: {tmp_path / 'runtime.env'}" in output
+    assert "Worker 地址: http://127.0.0.1:59075" in output
+    assert "OCI Hook:    /opt/hook" in output
+    assert "runc:        /opt/runc" in output
+    assert "权限保护:    drop" in output
 
 
 def test_pause_backs_up_runtime_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

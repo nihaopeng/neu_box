@@ -90,11 +90,11 @@ func main() {
 func run(stdin io.Reader, cfg config.Config, stderr io.Writer) int {
 	state, err := readState(stdin)
 	if err != nil {
-		logf(stderr, "读 OCI state 失败：%v", err)
+		logf(stderr, "无法读取容器状态：%v", err)
 		return 1
 	}
 	if state.ID == "" || state.Pid <= 0 {
-		logf(stderr, "OCI state 不完整（id=%q pid=%d），拒绝登记", state.ID, state.Pid)
+		logf(stderr, "容器状态不完整，无法确认设备授权（id=%q pid=%d）", state.ID, state.Pid)
 		return 1
 	}
 	sandbox, err := sandboxName(state)
@@ -110,10 +110,9 @@ func run(stdin io.Reader, cfg config.Config, stderr io.Writer) int {
 	}
 	_, err = register(cfg.WorkerURL, body, httpTimeout)
 	if err != nil {
-		logf(stderr, "登记容器 %s（沙盒 %s）失败：%v", state.ID, sandbox, err)
+		logf(stderr, "容器 %s 的设备授权失败（沙盒 %s）：%v", state.ID, sandbox, err)
 		return 1
 	}
-	logf(stderr, "已登记容器 %s → 沙盒 %s（host pid %d）", state.ID, sandbox, state.Pid)
 	return 0
 }
 
@@ -134,22 +133,22 @@ func sandboxName(state ociState) (string, error) {
 		return value, nil
 	}
 	if state.Bundle == "" {
-		return "", fmt.Errorf("OCI state 里没有 %s annotation，也没有 bundle 路径可以回退", annotationKey)
+		return "", fmt.Errorf("容器缺少 Neu Box 管理信息，无法确定设备授权")
 	}
 	configPath := filepath.Join(state.Bundle, configFileName)
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
-		return "", fmt.Errorf("OCI state 里没有 %s annotation，读 %s 也失败：%v", annotationKey, configPath, err)
+		return "", fmt.Errorf("无法读取容器配置 %s，无法确定设备授权：%v", configPath, err)
 	}
 	var parsed struct {
 		Annotations map[string]string `json:"annotations"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", fmt.Errorf("OCI state 里没有 %s annotation，%s 也不是合法 JSON：%v", annotationKey, configPath, err)
+		return "", fmt.Errorf("容器配置 %s 格式无效，无法确定设备授权：%v", configPath, err)
 	}
 	value := parsed.Annotations[annotationKey]
 	if value == "" {
-		return "", fmt.Errorf("OCI state 和 %s 里都没有 %s annotation", configPath, annotationKey)
+		return "", fmt.Errorf("容器配置 %s 缺少 Neu Box 管理信息，无法确定设备授权", configPath)
 	}
 	return value, nil
 }

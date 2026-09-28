@@ -63,7 +63,7 @@ func parseAcquireOptions(args []string) (acquireOptions, error) {
 			}
 			options.pidSet = true
 		case "--container":
-			return options, errors.New("acquire 仅支持宿主 PID；请在宿主 shell 申请沙盒后启动容器")
+			return options, errors.New("acquire 仅支持宿主机进程。请在宿主机终端申请沙盒后启动容器")
 		case "--command", "--workdir", "--container-user", "--env", "--":
 			return options, errors.New("命令任务已移至 submit；请使用 neubox submit [选项] -- <command>")
 		default:
@@ -93,7 +93,7 @@ func (a *app) runTerminalAcquire(options acquireOptions) int {
 		shellPID = options.pid
 	}
 	if a.insideContainer() {
-		return a.usageError("acquire 仅支持宿主 PID，不能从容器内申请；请在宿主 shell 申请沙盒")
+		return a.usageError("容器内不能申请终端沙盒。请在宿主机终端执行 neubox acquire")
 	}
 	// SIGINT 的 handler 必须**在第一次请求之前**就装好。
 	//
@@ -168,7 +168,7 @@ func (a *app) runTerminalAcquire(options acquireOptions) int {
 	if interrupted || interruptPending() {
 		// 卡已经拿到、但用户在请求飞行途中就按了 Ctrl-C：意图是"不要了"，
 		// 所以把刚建的沙盒释放掉再按 130 退出 —— 不能把一张卡留在场上。
-		a.printWarning("acquire_interrupted", "收到 Ctrl-C，释放刚创建的沙盒")
+		a.printWarning("acquire_interrupted", "申请已中断，正在释放沙盒")
 		status, raw, err := a.worker.Request(http.MethodPost, "/sandbox/release", nil, map[string]any{
 			"sandbox_name": response.SandboxName,
 			"host_pid":     a.getPID(),

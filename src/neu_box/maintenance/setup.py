@@ -48,7 +48,7 @@ def setup(
 ) -> bool:
     require_root()
     if subprocess.run(["systemctl", "is-active", "--quiet", SERVICE]).returncode == 0:
-        raise RuntimeError("Worker 仍在运行，请先执行 neuboxctl pause")
+        raise RuntimeError("Worker 正在运行。请先执行 neuboxctl pause")
 
     migrate_config(config)
     # Legacy env files used ``port``. Resolve the port after that key has
@@ -60,18 +60,19 @@ def setup(
     runtime = initialize_runtime_config(port, real_runc)
     docker = prepare_docker_config()
     print(
-        f"Runtime 配置: {runtime.path}\n"
-        f"  Worker URL: {runtime.worker_url}\n"
-        f"  OCI hook:   {runtime.hook}\n"
-        f"  real runc:  {runtime.real_runc}\n"
-        f"  cap guard:  {runtime.cap_guard}",
+        f"运行时配置: {runtime.path}\n"
+        f"Worker 地址: {runtime.worker_url}\n"
+        f"OCI Hook:    {runtime.hook}\n"
+        f"runc:        {runtime.real_runc}\n"
+        f"权限保护:    {runtime.cap_guard}",
         flush=True,
     )
     for operation in (migrate_database, check_database):
         status = operation(
             database_path(), MIGRATIONS_PACKAGE, REQUIRED_COLUMNS, REQUIRED_INDEXES,
         )
-        print(f"{operation.__name__}: schema={status.current}", flush=True)
+        label = "数据库迁移" if operation is migrate_database else "数据库检查"
+        print(f"{label}: schema {status.current}", flush=True)
 
     # 在启动服务前设置，避免恢复的 pending 在健康检查前开始执行。
     # Keep the service paused while it is starting and during health checks.
@@ -79,7 +80,7 @@ def setup(
     mark_paused()
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", SERVICE], check=True)
-    print("正在等待 Worker 加载 BPF 并通过 /healthz 检查。", flush=True)
+    print("Worker 正在启动，等待健康检查。", flush=True)
     expected_health = {
         'status': 'ok', 'role': 'worker',
         'version': __version__, 'schema_version': status.current,
@@ -89,7 +90,7 @@ def setup(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(
-                "Worker 健康检查超时，保持暂停；请查看 "
+                "Worker 健康检查超时，调度保持暂停。请查看 "
                 "journalctl -u neuboxd.service"
             )
         try:
@@ -98,11 +99,11 @@ def setup(
             time.sleep(min(1, max(0, deadline - time.monotonic())))
             continue
         if any(health.get(key) != value for key, value in expected_health.items()):
-            raise RuntimeError(f"Worker 健康检查不通过，保持暂停: {health}")
+            raise RuntimeError(f"Worker 健康检查未通过，调度保持暂停：{health}")
         break
     if not activate_docker_config(docker, restart=restart_docker):
         return False
     control_worker("resume", port)
     clear_pause_marker()
-    print("Worker 已就绪，已恢复任务调度。", flush=True)
+    print("Worker 已就绪，任务调度已恢复。", flush=True)
     return True

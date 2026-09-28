@@ -33,7 +33,7 @@ func (a *app) runShell(args []string) int {
 	}
 	binary, err := a.lookPath(shell)
 	if err != nil {
-		a.printError("shell_not_found", fmt.Sprintf("找不到 shell %q: %v", shell, err))
+		a.printError("shell_not_found", fmt.Sprintf("未找到终端程序 %q：%v", shell, err))
 		return 1
 	}
 	// Keep the supervisor alive throughout acquire, child startup and cleanup.
@@ -49,7 +49,7 @@ func (a *app) runShell(args []string) int {
 	}
 	sandboxName := a.acquiredSandbox
 	if sandboxName == "" {
-		return a.internalError("invalid_worker_response", fmt.Errorf("acquire 成功但没有沙盒名"))
+		return a.internalError("invalid_worker_response", fmt.Errorf("Worker 响应缺少沙盒信息"))
 	}
 	select {
 	case <-interrupts:
@@ -67,7 +67,7 @@ func (a *app) runShell(args []string) int {
 		status = 1
 	}
 	if releaseCode := a.runRelease([]string{sandboxName}); releaseCode != 0 {
-		printFields(a.errOut, outputField{"warning", "请手动释放沙盒"}, outputField{"command", "neubox release " + sandboxName})
+		printFields(a.errOut, outputField{"warning", "沙盒未能自动释放，请执行以下命令"}, outputField{"command", "neubox release " + sandboxName})
 		if status == 0 {
 			return releaseCode
 		}

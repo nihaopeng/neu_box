@@ -185,7 +185,7 @@ func TestPrepareForwardsBadInputUntouched(t *testing.T) {
 			},
 			phase:   "not-a-phase",
 			explain: "配置写错是全局的，但只影响沙盒容器",
-			wantLog: true,
+			wantLog: false,
 		},
 	}
 	for _, tc := range cases {

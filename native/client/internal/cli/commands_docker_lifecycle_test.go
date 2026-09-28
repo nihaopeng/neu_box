@@ -141,7 +141,7 @@ func TestDockerRestartRejectsUnmanagedContainerBeforeStop(t *testing.T) {
 		}
 		return dockerInspectJSON(true, false), nil
 	}
-	if code := application.run([]string{"docker", "restart", "train"}); code != 2 || !strings.Contains(errOut.String(), "annotation") {
+	if code := application.run([]string{"docker", "restart", "train"}); code != 2 || !strings.Contains(errOut.String(), "不受 Neu Box 管理") {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
 }

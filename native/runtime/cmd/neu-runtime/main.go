@@ -154,23 +154,23 @@ func main() {
 func run(args []string, cfg config.Config, stderr io.Writer) int {
 	argv, err := prepare(args, cfg, stderr)
 	if err != nil {
-		logf(stderr, "拒绝转发：%v", err)
+		logf(stderr, "容器运行时启动失败：%v", err)
 		return 1
 	}
 
 	binary, err := exec.LookPath(cfg.RealRunc)
 	if err != nil {
-		logf(stderr, "找不到真 runtime %q：%v", cfg.RealRunc, err)
+		logf(stderr, "无法执行配置的 runc %q：%v", cfg.RealRunc, err)
 		return 1
 	}
 	if err := guardSelfExec(binary); err != nil {
-		logf(stderr, "拒绝转发：%v", err)
+		logf(stderr, "容器运行时启动失败：%v", err)
 		return 1
 	}
 	// 用 exec 换掉自己，不是 fork 一个子进程：runc 的 stdin/stdout/退出码/信号
 	// 都得原样透出去，中间夹一层进程只会把这三样都搞坏。
 	if err := syscall.Exec(binary, execArgv(binary, argv), os.Environ()); err != nil {
-		logf(stderr, "exec %s 失败：%v", binary, err)
+		logf(stderr, "无法执行容器运行时 %s：%v", binary, err)
 		return 1
 	}
 	return 0 // 到不了：exec 成功的话这个进程已经是 runc 了
@@ -201,7 +201,7 @@ func guardSelfExec(binary string) error {
 		return nil
 	}
 	if os.SameFile(selfInfo, binaryInfo) {
-		return fmt.Errorf("NEU_BOX_REAL_RUNC=%s 指向 wrapper 自己，会无限递归", binary)
+		return fmt.Errorf("NEU_BOX_REAL_RUNC=%s 不能指向 Neu Box 运行时自身", binary)
 	}
 	return nil
 }
@@ -224,7 +224,7 @@ func prepare(args []string, cfg config.Config, stderr io.Writer) ([]string, erro
 		if processPath == "" {
 			// 找不到就剪不了，原样转发（和"看不明白就转发"一个口径）。但要说一声：
 			// 这条路径静默失效的后果是 exec 出来的进程可能仍是 admin。
-			logf(stderr, "exec 没带 --process，找不到进程的 capabilities，原样转发")
+			logf(stderr, "容器进程缺少 --process 参数，无法检查执行权限")
 		}
 		changed, err := applyCapGuardToExecProcess(
 			processPath, cfg.CapGuard,
@@ -234,10 +234,7 @@ func prepare(args []string, cfg config.Config, stderr io.Writer) ([]string, erro
 			return nil, err
 		}
 		if changed {
-			logf(stderr,
-				"已移除 %s：exec 出的进程带着全套能力位（docker 按容器 HostConfig "+
-					"现算的），Ascend 驱动会把它判成 admin 并建出全量 UDA 设备表",
-				capGuardDropCapability)
+			logf(stderr, "为保持设备隔离，已限制容器进程的 %s 权限", capGuardDropCapability)
 		}
 		return args, nil
 	}
@@ -249,7 +246,7 @@ func prepare(args []string, cfg config.Config, stderr io.Writer) ([]string, erro
 	if !ok || bundle == "" {
 		// 没给 --bundle（runc 会当成当前目录）。找不到 bundle 就找不到
 		// config.json，判断不了该不该注入。
-		logf(stderr, "%s 没带 --bundle，无法定位 config.json，原样转发", sub)
+		logf(stderr, "%s 缺少 --bundle 参数，无法检查容器设备授权", sub)
 		return args, nil
 	}
 
@@ -266,22 +263,18 @@ func prepare(args []string, cfg config.Config, stderr io.Writer) ([]string, erro
 		return nil, err
 	}
 	if changed {
-		logf(stderr,
-			"已移除 %s：%s 请求了全部能力位（等价 --privileged/--cap-add=ALL），"+
-				"Ascend 驱动会把这类容器判成 admin 并建出全量 UDA 设备表，NPU 隔离会失效",
-			capGuardDropCapability, configPath)
+		logf(stderr, "为保持设备隔离，已限制容器的 %s 权限", capGuardDropCapability)
 	}
 
 	annotation, err := scanBundle(configPath)
 	if err != nil {
 		// 读不了 / 不是合法 JSON：同样判断不了。这台机器上所有容器都从这条路
 		// 走，wrapper 自己的问题不能挡住别人。
-		logf(stderr, "%v，不注入 hook，原样转发", err)
+		logf(stderr, "无法检查容器配置：%v", err)
 		return args, nil
 	}
 	if annotation == "" {
 		// 契约规定的 fail-closed 路径：容器照常起来，然后在 BPF 那里被拒。
-		logf(stderr, "%s 里没有 %s annotation，不注入 hook，原样转发", configPath, annotationKey)
 		return args, nil
 	}
 
@@ -291,16 +284,9 @@ func prepare(args []string, cfg config.Config, stderr io.Writer) ([]string, erro
 	}
 	// 这里会把 config.json 再读一遍：多读一个 2KB 的文件换两个函数各自独立、
 	// 各自可测，划算。
-	injected, err := injectHook(configPath, cfg.HookPhase, cfg.HookPath)
+	_, err = injectHook(configPath, cfg.HookPhase, cfg.HookPath)
 	if err != nil {
 		return nil, err
-	}
-	if injected {
-		logf(stderr, "已给沙盒 %s 注入 %s hook（path=%s, timeout=%ds）：%s",
-			annotation, cfg.HookPhase, cfg.HookPath, hookTimeoutSeconds, configPath)
-	} else {
-		logf(stderr, "沙盒 %s 的 %s hook 已经在 config.json 里，不重复加：%s",
-			annotation, cfg.HookPhase, configPath)
 	}
 	return args, nil
 }

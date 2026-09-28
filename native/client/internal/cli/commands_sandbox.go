@@ -215,7 +215,7 @@ func (a *app) runJoin(args []string) int {
 		return a.usageError("用法: neubox join <sandbox_name>")
 	}
 	if a.insideContainer() {
-		return a.usageError("容器终端不需要 join：从已 acquire 的 shell 启动子进程即可继承沙盒。")
+		return a.usageError("请在宿主机终端中执行 neubox join")
 	}
 	sandboxName := strings.TrimSpace(args[0])
 	shellPID := a.getPPID()

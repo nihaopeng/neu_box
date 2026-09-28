@@ -24,11 +24,7 @@ func (a *app) workerFailure(status int, raw []byte) int {
 		_ = printJSONValue(a.errOut, output)
 		return 1
 	}
-	fields := []outputField{{"error", message}, {"http_status", strconv.Itoa(status)}}
-	if code != "" {
-		fields = append(fields, outputField{"code", code})
-	}
-	printFields(a.errOut, fields...)
+	printFields(a.errOut, outputField{"error", message}, outputField{"http_status", strconv.Itoa(status)})
 	return 1
 }
 

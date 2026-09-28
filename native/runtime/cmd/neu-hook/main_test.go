@@ -178,8 +178,8 @@ func TestRunRejectsStartWithoutAuthorization(t *testing.T) {
 			if received() == nil {
 				t.Fatal("请求没发出去")
 			}
-			if !strings.Contains(stderr.String(), "登记容器") {
-				t.Fatalf("stderr 没说明登记失败：%s", stderr.String())
+			if !strings.Contains(stderr.String(), "设备授权失败") {
+				t.Fatalf("stderr 没说明授权失败：%s", stderr.String())
 			}
 			if !strings.Contains(stderr.String(), tc.code) {
 				t.Fatalf("stderr 没带上 Worker 的业务码 %s：%s", tc.code, stderr.String())
@@ -253,7 +253,7 @@ func TestRunFailsWithoutSandboxAnnotation(t *testing.T) {
 	if received() != nil {
 		t.Fatal("没有 annotation 时不该发请求")
 	}
-	if !strings.Contains(stderr.String(), annotationKey) {
+	if !strings.Contains(stderr.String(), "无法确定设备授权") {
 		t.Fatalf("stderr 里该点名缺了什么：%s", stderr.String())
 	}
 }

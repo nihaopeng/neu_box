@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"os/user"
@@ -108,7 +107,11 @@ func (a *app) run(args []string) int {
 		return 0
 	}
 	if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
-		a.printHelp()
+		if args[0] == "docker" || args[0] == "dk" {
+			a.printDockerHelp()
+		} else {
+			a.printHelp()
+		}
 		return 0
 	}
 
@@ -118,8 +121,16 @@ func (a *app) run(args []string) int {
 			a.printDockerHelp()
 			return 0
 		}
+		if len(args) == 3 && args[1] == "docker" && args[2] == "verbose" {
+			a.printVerboseDockerHelp()
+			return 0
+		}
+		if len(args) == 2 && args[1] == "verbose" {
+			a.printVerboseHelp()
+			return 0
+		}
 		if len(args) != 1 {
-			return a.usageError("用法: neubox help [docker]")
+			return a.usageError("用法: neubox help [verbose|docker [verbose]]")
 		}
 		a.printHelp()
 		return 0
@@ -161,8 +172,6 @@ func (a *app) run(args []string) int {
 			a.printError("unknown_command", "未知命令: "+args[0])
 		} else {
 			printFields(a.errOut, outputField{"error", "未知命令: " + args[0]}, outputField{"hint", "neubox help"})
-			fmt.Fprintln(a.errOut)
-			a.printHelpTo(a.errOut)
 		}
 		return 2
 	}

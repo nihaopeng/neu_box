@@ -74,15 +74,14 @@ def pause(port: int, timeout: int, config: Path | None) -> None:
     # operator can retry or remove the marker through setup/resume.
     mark_paused()
     status = control_worker("pause", port)
-    print("等待运行任务结束和沙盒回收；pending 保留，不自动中断任务。", flush=True)
+    print("正在等待运行中的任务结束及沙盒回收；排队任务保留。", flush=True)
     while not status['quiet']:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(
-                "等待维护超时，Worker 保持暂停，尚未停服或 cleanup。"
-                "维护期间 resume 会被拒绝；请重试 pause，"
-                "或重启服务后再 resume。"
-                f"当前状态: {json.dumps(status, ensure_ascii=False)}"
+                "等待维护超时，Worker 保持暂停，尚未停止服务或清理资源。"
+                "请重试 neuboxctl pause，或重启服务后执行 neuboxctl resume。"
+                f"当前状态：{json.dumps(status, ensure_ascii=False)}"
             )
         status = request_worker(port, "/maintenance", timeout=min(5, remaining))['maintenance']
         # 不需要处理"期间被 resume"：维护进行中 resume 会被 Worker 拒绝
@@ -100,8 +99,8 @@ def pause(port: int, timeout: int, config: Path | None) -> None:
     if RUNTIME_CONFIG_PATH.is_file():
         runtime_backup = backup.with_suffix(".runtime.env")
         shutil.copyfile(RUNTIME_CONFIG_PATH, runtime_backup)
-        print(f"Runtime 配置备份: {runtime_backup}", flush=True)
+        print(f"运行时配置备份: {runtime_backup}", flush=True)
     subprocess.run([str(sandbox_executable_path()), "cleanup"], check=True)
     # 备份和 cleanup 全部成功后才停服；前面失败时保留暂停中的 API 供重试。
     stop_worker_after_cleanup()
-    print("Worker 已停止，旧 BPF 已清理，可以安装新版 RPM。", flush=True)
+    print("Worker 已停止，设备隔离状态已清理。现在可以安装新版 RPM。", flush=True)

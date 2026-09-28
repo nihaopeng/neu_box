@@ -103,7 +103,7 @@ func parseSubmitOptions(args []string) (submitOptions, error) {
 			}
 			options.scriptPath = raw
 		case "--container":
-			return options, errors.New("submit 不使用 --container；新容器请在 -- 后运行 neubox docker run，已有停止容器请在脚本里使用 neubox docker start")
+			return options, errors.New("submit 不支持 --container。新容器请在 -- 后运行 neubox docker run；已有的停止容器请在脚本中使用 neubox docker start")
 		case "--image":
 			raw, err := optionValue(args, &index)
 			if err != nil {

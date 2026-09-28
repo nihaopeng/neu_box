@@ -33,7 +33,7 @@ ACCEPTANCE = Path("/usr/libexec/neu-box/tests/neu-box-deployment-tests")
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="neuboxctl",
-        description="Neu Box Worker 管理 CLI",
+        description="Neu Box Worker 管理命令",
     )
     parser.add_argument(
         "--config",
@@ -42,7 +42,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     setup_parser = commands.add_parser(
-        "setup", help="配置 OCI runtime 和 Docker、迁移数据库、启动 Worker 并恢复调度",
+        "setup", help="配置容器运行时、迁移数据库并启动 Worker",
     )
     setup_parser.add_argument(
         "--timeout", type=int, default=60,
@@ -50,7 +50,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     setup_parser.add_argument(
         "--real-runc",
-        help="真实 runc 的路径；默认自动查找本机 runc，非标准路径时可指定",
+        help="runc 的实际路径；默认自动查找，非标准安装路径可指定",
     )
     setup_parser.add_argument(
         "--restart-docker", action="store_true",
@@ -58,7 +58,7 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     pause_parser = commands.add_parser(
-        "pause", help="等待任务与沙盒静止、备份、清理 BPF，最后停服",
+        "pause", help="等待任务结束，备份数据并停止 Worker",
     )
     pause_parser.add_argument(
         "--timeout", type=int, default=0,
@@ -69,7 +69,7 @@ def _parser() -> argparse.ArgumentParser:
     add_database_commands(commands)
 
     sandbox = commands.add_parser(
-        "sandbox", help="直接调用 native sandbox CLI", add_help=False,
+        "sandbox", help="运行设备沙盒管理命令", add_help=False,
     )
     sandbox.add_argument("args", nargs=argparse.REMAINDER)
 

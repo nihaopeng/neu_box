@@ -44,9 +44,15 @@ func (a *app) runDocker(args []string) int {
 	case "status":
 		return a.runDockerStatus(args[1:])
 	case "exec":
-		return a.usageError("neubox docker exec 不借卡，也不改变运行中容器的设备；请用原生 docker exec。先用 neubox docker status <容器> 查看授权；详见 neubox docker help")
+		return a.usageError("neubox docker exec 不支持更换设备授权。请先用 neubox docker status <容器> 查看授权，再使用 docker exec <容器> <命令>；详见 neubox docker help")
 	case "help", "-h", "--help":
-		a.printDockerHelp()
+		if len(args) == 2 && args[1] == "verbose" {
+			a.printVerboseDockerHelp()
+		} else if len(args) == 1 {
+			a.printDockerHelp()
+		} else {
+			return a.usageError("用法: neubox docker help [verbose]")
+		}
 		return 0
 	default:
 		return a.usageError(fmt.Sprintf(
@@ -61,8 +67,7 @@ func (a *app) runDocker(args []string) int {
 
 	dockerBinary, err := a.lookPath("docker")
 	if err != nil {
-		a.printError("docker_not_found",
-			"PATH 里找不到 docker 命令；请在装了 docker 的主机上运行 neubox docker run")
+		a.printError("docker_not_found", "未找到 Docker CLI。请确认 Docker 已安装且 docker 命令位于 PATH 中")
 		return 1
 	}
 
@@ -89,23 +94,20 @@ func (a *app) runDocker(args []string) int {
 // hook 登记成功后确认认领；无法确认时尝试停止容器并返回失败。
 func (a *app) runDockerStart(args []string) int {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return a.usageError("用法: " + dockerStartUsage +
-			"（容器名放最前面，docker 自己的选项跟在它后面）")
+		return a.usageError("用法: " + dockerStartUsage)
 	}
 	attached, err := dockerStartAttachOption(args[1:])
 	if err != nil {
 		return a.usageError(err.Error())
 	}
 	if a.insideContainer() {
-		return a.usageError("容器内不能按 PID 反查沙盒（PID namespace 与宿主机" +
-			"不同）；请在宿主 shell 里执行 neubox docker start")
+		return a.usageError("请在宿主机终端中执行 neubox docker start")
 	}
 	container := args[0]
 
 	dockerBinary, err := a.lookPath("docker")
 	if err != nil {
-		a.printError("docker_not_found",
-			"PATH 里找不到 docker 命令；请在装了 docker 的主机上运行 neubox docker start")
+		a.printError("docker_not_found", "未找到 Docker CLI。请确认 Docker 已安装且 docker 命令位于 PATH 中")
 		return 1
 	}
 	info, err := a.inspectDockerContainer(dockerBinary, container)
@@ -113,10 +115,10 @@ func (a *app) runDockerStart(args []string) int {
 		return a.internalError("docker_inspect_failed", err)
 	}
 	if info.State.Running {
-		return a.usageError("容器已经运行；exec 只能沿用已有授权。需要重新借卡请显式使用 neubox docker restart " + container)
+		return a.usageError("容器正在运行。如需更换设备授权，请使用 neubox docker restart " + container)
 	}
 	if strings.TrimSpace(info.HostConfig.Annotations["sandbox_cgroup"]) == "" {
-		return a.usageError("容器创建时没有 sandbox_cgroup annotation，无法借卡；请用 neubox docker run 创建受管容器")
+		return a.usageError("该容器不受 Neu Box 管理，无法分配设备。请使用 neubox docker run 创建容器")
 	}
 	sandboxName, err := a.lendSandboxTo(info.ID)
 	if err != nil {
@@ -181,7 +183,7 @@ func (a *app) runAttachedDockerStart(binary string, argv []string, container, co
 		if state == "consumed" {
 			if actualSandbox != sandboxName {
 				abort(completed != nil)
-				return a.internalError("sandbox_binding_mismatch", fmt.Errorf("容器 %s 借条被沙盒 %q 认领，预期 %q", container, actualSandbox, sandboxName))
+				return a.internalError("sandbox_binding_mismatch", fmt.Errorf("容器 %s 的设备授权属于沙盒 %q，预期为 %q", container, actualSandbox, sandboxName))
 			}
 			a.printStarted(container, containerID, sandboxName)
 			if completed == nil {
@@ -200,7 +202,7 @@ func (a *app) runAttachedDockerStart(binary string, argv []string, container, co
 			} else if completed != nil && completed.status != 0 {
 				return completed.status
 			}
-			a.printError("sandbox_not_bound", fmt.Sprintf("容器 %s 未绑定沙盒 %s；已尝试停止容器", container, sandboxName))
+			a.printError("sandbox_not_bound", fmt.Sprintf("无法确认容器 %s 对沙盒 %s 的设备授权；已尝试停止容器。请检查容器和 Worker 状态", container, sandboxName))
 			return 1
 		}
 		select {
@@ -222,7 +224,7 @@ func dockerStartAttachOption(options []string) (bool, error) {
 			attached = true
 		case option == "--checkpoint" || option == "--checkpoint-dir" ||
 			strings.HasPrefix(option, "--checkpoint=") || strings.HasPrefix(option, "--checkpoint-dir="):
-			return false, errors.New("neubox docker start 不支持 checkpoint 恢复；当前 runtime 只在普通容器创建时登记设备授权")
+			return false, errors.New("neubox docker start 不支持从 checkpoint 恢复容器")
 		case option == "--detach-keys":
 			index++
 			if index == len(options) {
@@ -274,7 +276,7 @@ func (a *app) lendSandboxTo(containerID string) (string, error) {
 	}
 	sandboxName := strings.TrimSpace(response.SandboxName)
 	if sandboxName == "" {
-		return "", errors.New("Worker 没有返回借出去的沙盒名")
+		return "", errors.New("Worker 响应缺少沙盒信息")
 	}
 	return sandboxName, nil
 }
@@ -292,7 +294,7 @@ func (a *app) confirmStartBinding(dockerBinary, container, containerID, sandboxN
 		return a.printStarted(container, containerID, sandboxName)
 	}
 	a.stopAfterBindingFailure(dockerBinary, containerID, true)
-	a.printError("sandbox_not_bound", fmt.Sprintf("容器 %s 未绑定沙盒 %s；已尝试停止容器", container, sandboxName))
+	a.printError("sandbox_not_bound", fmt.Sprintf("无法确认容器 %s 对沙盒 %s 的设备授权；已尝试停止容器。请检查容器和 Worker 状态", container, sandboxName))
 	return 1
 }
 
@@ -305,7 +307,7 @@ func (a *app) waitStartBinding(containerID, expectedSandbox string) (bool, error
 		}
 		if state == "consumed" {
 			if sandboxName != expectedSandbox {
-				return false, fmt.Errorf("借条被沙盒 %q 认领，预期 %q", sandboxName, expectedSandbox)
+				return false, fmt.Errorf("设备授权属于沙盒 %q，预期为 %q", sandboxName, expectedSandbox)
 			}
 			return true, nil
 		}
@@ -423,9 +425,7 @@ func (a *app) resolveOwnSandbox() (string, int) {
 	// 反查出一个别人的沙盒名。这条是错误分支，不在主路径上；先报错，
 	// 异常处理以后再说。
 	if a.insideContainer() {
-		a.printError("sandbox_lookup_unsupported",
-			"容器内无法按 PID 反查沙盒（PID namespace 与宿主机不同）；"+
-				"请改用原生 docker run --annotation sandbox_cgroup=<沙盒名>")
+		a.printError("sandbox_lookup_unsupported", "请在宿主机终端中执行 neubox docker run")
 		return "", 1
 	}
 
@@ -445,52 +445,59 @@ func (a *app) resolveOwnSandbox() (string, int) {
 		return "", a.internalError("invalid_worker_response", err)
 	}
 	if response.SandboxName == nil || strings.TrimSpace(*response.SandboxName) == "" {
-		a.printError("not_in_sandbox", fmt.Sprintf(
-			"当前进程 (pid %d) 不在任何沙盒中；请先执行 neubox shell 或 neubox acquire，"+
-				"或改用原生 docker run --annotation sandbox_cgroup=<沙盒名>", selfPID))
+		a.printError("not_in_sandbox", "当前终端未获得设备授权。请先执行 neubox shell 或 neubox acquire")
 		return "", 1
 	}
 	return strings.TrimSpace(*response.SandboxName), 0
 }
 
 func (a *app) printDockerHelp() {
-	fmt.Fprint(a.out, `neubox docker — 管理容器与沙盒的授权关系
+	fmt.Fprint(a.out, `neubox docker — 容器设备授权
 
-用法:`+"\n    "+dockerRunUsage+`
-    `+dockerStartUsage+`
-    `+dockerRestartUsage+`
-    `+dockerStatusUsage+`
+用法:
+    neubox docker run <docker run 参数...>
+    neubox docker start <container> [docker start 参数...]
+    neubox docker restart <container>
+    neubox docker status <container>
 
-说明:
-    docker run 的参数一个不改，只在最前面补一行 annotation：
-        neubox docker run --rm -it ubuntu bash
-      = docker run --annotation sandbox_cgroup=<沙盒名> --rm -it ubuntu bash
+示例:
+    neubox shell --device-num 2
+    neubox docker run --rm -it ubuntu bash
+    neubox docker start train-1 -a
+    neubox docker status train-1
+    docker exec -it train-1 bash
 
-    容器必须带这行 annotation：Worker 靠它把容器登记到沙盒名下，没登记的
-    容器即使卡空着也一律拿不到设备（fail-closed）。需按 docs/deployment.md 配置
-    Docker 默认 runtime，并由管理员重启 dockerd。
+详细帮助: neubox docker help verbose
+`)
+}
 
-    沙盒按本进程 PID 反查（neubox 是 shell / acquire 管理的 shell 的子进程，cgroup
-    身份是继承的）；查不到直接报错，不会退化成不加 annotation 启动。
+func (a *app) printVerboseDockerHelp() {
+	fmt.Fprint(a.out, `neubox docker — 容器命令参考
 
-    docker start 的事多一层：容器上那行 annotation 是建容器时写死的，而
-    `+"`docker start`"+` 既没有 --annotation、也看不到是谁在调。所以这里先把这个
-    shell 的沙盒存成一张借条（10 秒内有效、一次性），hook 登记时认领；
-    认领失败会报错并尝试停止容器。原生 docker start 不会建立新的借条，
-    不能用它换卡。需要等待容器原程序结束时使用 neubox docker start <容器> -a。
-    checkpoint 恢复不经过当前 runtime 的普通 create 授权路径，因此拒绝。
+用法:
+    neubox docker run <docker run 参数...>
+    neubox docker start <container> [docker start 参数...]
+    neubox docker restart <container>
+    neubox docker status <container>
 
-    docker restart 用于运行中的受管容器：先停止并等待旧授权撤销，再按当前
-    shell 的沙盒重新启动。它会中断容器里的工作；没有 annotation 的容器
-    无法通过 restart 获得设备。已停止的容器请用 docker start。
+命令:
+    run      在当前沙盒中创建并启动容器；Docker 参数原样传递
+    start    在当前沙盒中启动已停止的受管容器；-a 等待容器退出
+    restart  在当前沙盒中重启运行中的受管容器；现有工作会中断
+    status   查询容器运行状态及当前设备授权
 
-    docker status 合并 Docker 运行状态与 Worker 当前登记；已停止的容器没有
-    当前设备授权。查询到的设备是授权记录，不代表驱动健康状态。
+使用要求:
+    run、start、restart 需要先通过 neubox shell 或 neubox acquire 获取沙盒。
+    start、restart 仅适用于由 Neu Box 管理的容器。
+    运行中的容器不能通过 docker exec 更换设备授权；需要更换时使用 restart。
+    进入运行中的容器请使用 docker exec。
 
-    neubox docker exec 不提供借卡功能，也不会转发命令。进入运行中的容器请用
-    原生 docker exec -it <容器> bash；执行前可用 neubox docker status 查询。
-
-    没有自己的选项：要显式指定沙盒、或者要自己写 annotation，直接用原生
-    docker run --annotation sandbox_cgroup=<沙盒名> ... 就好。
+示例:
+    neubox shell --device-num 2
+    neubox docker run --rm -it ubuntu bash
+    neubox docker start train-1 -a
+    neubox docker restart train-1
+    neubox docker status train-1
+    docker exec -it train-1 bash
 `)
 }

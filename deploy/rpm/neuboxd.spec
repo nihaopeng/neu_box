@@ -64,7 +64,7 @@ test ! -e %{buildroot}%{_sysconfdir}/neu-box/runtime.env
 # import another bundled module after RPM has changed the files.
 if /usr/bin/systemctl is-active --quiet \
     neuboxd.service >/dev/null 2>&1; then
-    echo "neuboxd.service is active; run '/usr/libexec/neu-box/neuboxctl/neuboxctl pause' before installing this RPM" >&2
+    echo "neuboxd.service 正在运行；安装前请执行 '/usr/libexec/neu-box/neuboxctl/neuboxctl pause'" >&2
     exit 1
 fi
 
@@ -74,28 +74,31 @@ fi
 /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || :
 
 %posttrans
-# This is the last RPM transaction hook, after the old package's cleanup.
+# DNF may print verification and transaction summaries after this hook.
 cat <<'EOF'
-Neu Box files installed:
-  1. /etc/neu-box/worker.env is installed or preserved.
-  2. Run sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup.
-     Setup starts the Worker and updates runtime.env and Docker configuration.
-  3. Run tests only after setup succeeds and the Worker is online:
-     sudo /usr/libexec/neu-box/neuboxctl/neuboxctl test
-     Full Ascend isolation tests require NEU_BOX_DRIVER_PROBE_IMAGE.
-See the deployment guide installed by this RPM (rpm -qd neuboxd).
+
+================================================================
+ Neu Box 安装完成
+----------------------------------------------------------------
+ 配置  /etc/neu-box/worker.env（升级时保留现有配置）
+ 启用  sudo /usr/libexec/neu-box/neuboxctl/neuboxctl setup
+       setup 将配置 Docker；需要重启时会征询用户。
+ 验收  sudo /usr/libexec/neu-box/neuboxctl/neuboxctl test
+       Ascend 隔离测试需设置 NEU_BOX_DRIVER_PROBE_IMAGE。
+ 文档  rpm -qd neuboxd
+================================================================
 EOF
 
 %preun
 if [ "$1" -eq 0 ]; then
     if [ -f /etc/docker/daemon.json ] && \
         grep -q '"neu-box-runtime"' /etc/docker/daemon.json 2>/dev/null; then
-        echo "Docker still names neu-box-runtime; remove that configuration before erasing this RPM" >&2
+        echo "Docker 配置仍引用 neu-box-runtime；卸载前请先移除该配置" >&2
         exit 1
     fi
     if /usr/bin/systemctl is-active --quiet \
         neuboxd.service >/dev/null 2>&1; then
-        echo "neuboxd.service is active; run '/usr/libexec/neu-box/neuboxctl/neuboxctl pause' before erasing this RPM" >&2
+        echo "neuboxd.service 正在运行；卸载前请执行 '/usr/libexec/neu-box/neuboxctl/neuboxctl pause'" >&2
         exit 1
     fi
     /usr/bin/systemctl disable neuboxd.service >/dev/null 2>&1 || :

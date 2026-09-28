@@ -27,7 +27,7 @@ func (a *app) printError(code, message string) {
 		})
 		return
 	}
-	printFields(a.errOut, outputField{"error", message}, outputField{"code", code})
+	printFields(a.errOut, outputField{"error", message})
 }
 
 func (a *app) printWarning(code, message string) {
@@ -38,5 +38,5 @@ func (a *app) printWarning(code, message string) {
 		})
 		return
 	}
-	printFields(a.errOut, outputField{"warning", message}, outputField{"code", code})
+	printFields(a.errOut, outputField{"warning", message})
 }

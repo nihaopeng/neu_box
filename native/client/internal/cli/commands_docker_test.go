@@ -143,8 +143,8 @@ func TestDockerRunRefusesPIDLookupInsideContainer(t *testing.T) {
 	if call.argv != nil {
 		t.Fatalf("不该 exec docker: %q", call.argv)
 	}
-	if !strings.Contains(errOut.String(), "原生 docker") {
-		t.Fatalf("错误信息应指出改用原生 docker: %s", errOut.String())
+	if !strings.Contains(errOut.String(), "宿主机终端") {
+		t.Fatalf("错误信息应指出在宿主机执行: %s", errOut.String())
 	}
 }
 
@@ -506,7 +506,7 @@ func TestDockerStartRejectsMissingSandboxBeforeStarting(t *testing.T) {
 		t.Fatalf("不能启动容器: %q", call.argv)
 	}
 	if !strings.Contains(errOut.String(), "not_in_sandbox") {
-		t.Fatalf("要说清借条为何失败：%s", errOut.String())
+		t.Fatalf("应说明授权失败原因：%s", errOut.String())
 	}
 	// 没借条就不用回查认领结果。
 	if len(worker.Queries) != 0 {
@@ -570,7 +570,7 @@ func TestDockerStartRejectsContainerWithoutRuntimeAnnotation(t *testing.T) {
 		return 0, nil
 	}
 	if code := application.run([]string{"docker", "start", "neu-test"}); code == 0 ||
-		!strings.Contains(errOut.String(), "annotation") {
+		!strings.Contains(errOut.String(), "不受 Neu Box 管理") {
 		t.Fatalf("unmanaged start: exit=%d stderr=%s", code, errOut.String())
 	}
 }
@@ -604,7 +604,7 @@ func TestDockerStartRefusesInsideContainer(t *testing.T) {
 	if call.argv != nil {
 		t.Fatalf("不该去 start：%q", call.argv)
 	}
-	if !strings.Contains(errOut.String(), "宿主 shell") {
-		t.Fatalf("错误信息应指出去宿主 shell 跑：%s", errOut.String())
+	if !strings.Contains(errOut.String(), "宿主机终端") {
+		t.Fatalf("错误信息应指出在宿主机执行：%s", errOut.String())
 	}
 }

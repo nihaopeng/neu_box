@@ -70,7 +70,7 @@ func (a *app) runDockerStatus(args []string) int {
 	}
 	binary, err := a.lookPath("docker")
 	if err != nil {
-		a.printError("docker_not_found", "PATH 里找不到 docker 命令")
+		a.printError("docker_not_found", "未找到 Docker CLI。请确认 Docker 已安装且 docker 命令位于 PATH 中")
 		return 1
 	}
 	container := args[0]
@@ -106,7 +106,7 @@ func (a *app) runDockerStatus(args []string) int {
 		} else if binding.SandboxName != nil {
 			payload["authorization"] = "unknown"
 			payload["sandbox"] = *binding.SandboxName
-			payload["error"] = "Worker 返回了绑定，但没有沙盒资源记录"
+			payload["error"] = "容器授权信息不完整，请检查 Worker 状态"
 		} else {
 			payload["authorization"] = "none"
 		}
@@ -137,7 +137,7 @@ func (a *app) runDockerStatus(args []string) int {
 	fields = append(fields, outputField{"sandbox", *binding.SandboxName})
 	if binding.Sandbox == nil {
 		printFields(a.out, append(fields, outputField{"devices", "unknown"})...)
-		a.printWarning("sandbox_record_missing", "Worker 返回了容器绑定，但没有沙盒资源记录")
+		a.printWarning("sandbox_record_missing", "容器授权信息不完整，请检查 Worker 状态")
 		return 1
 	}
 	printFields(a.out, append(fields,
@@ -171,11 +171,11 @@ func (a *app) runDockerRestart(args []string) int {
 		return a.usageError("用法: " + dockerRestartUsage)
 	}
 	if a.insideContainer() {
-		return a.usageError("请在宿主 shell 中执行 neubox docker restart")
+		return a.usageError("请在宿主机终端中执行 neubox docker restart")
 	}
 	binary, err := a.lookPath("docker")
 	if err != nil {
-		a.printError("docker_not_found", "PATH 里找不到 docker 命令")
+		a.printError("docker_not_found", "未找到 Docker CLI。请确认 Docker 已安装且 docker 命令位于 PATH 中")
 		return 1
 	}
 	container := args[0]
@@ -187,7 +187,7 @@ func (a *app) runDockerRestart(args []string) int {
 		return a.usageError("容器已经停止；请使用 neubox docker start " + container)
 	}
 	if strings.TrimSpace(info.HostConfig.Annotations["sandbox_cgroup"]) == "" {
-		return a.usageError("容器创建时没有 sandbox_cgroup annotation，重启也无法借卡；请用 neubox docker run 创建受管容器")
+		return a.usageError("该容器不受 Neu Box 管理，无法更换设备授权。请使用 neubox docker run 创建容器")
 	}
 	if _, code := a.resolveOwnSandbox(); code != 0 {
 		return code
@@ -206,7 +206,7 @@ func (a *app) runDockerRestart(args []string) int {
 	}
 	sandboxName, err := a.lendSandboxTo(info.ID)
 	if err != nil {
-		return a.internalError("sandbox_not_lent", fmt.Errorf("容器已停止，借卡失败: %w", err))
+		return a.internalError("sandbox_not_lent", fmt.Errorf("容器已停止，但设备授权失败: %w", err))
 	}
 	if _, err := a.outputFn(binary, "start", container); err != nil {
 		return a.internalError("docker_start_failed", err)
@@ -216,12 +216,12 @@ func (a *app) runDockerRestart(args []string) int {
 		// A failed binding must not leave a supposedly GPU-ready container running.
 		_, stopErr := a.outputFn(binary, "stop", container)
 		if stopErr != nil {
-			a.printWarning("docker_stop_failed", fmt.Sprintf("授权未确认，停止容器也失败（%v）；容器可能仍在运行", stopErr))
+			a.printWarning("docker_stop_failed", fmt.Sprintf("设备授权未确认，停止容器失败：%v。容器可能仍在运行", stopErr))
 		}
 		if err != nil {
 			return a.internalError("sandbox_binding_unknown", fmt.Errorf("重启后无法确认授权: %w", err))
 		}
-		message := "重启后借条未被认领；请检查 runtime hook"
+		message := "重启后无法确认容器的设备授权；请检查 Docker 和 Worker 状态"
 		if stopErr == nil {
 			message += "；容器已停止"
 		} else {

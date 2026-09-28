@@ -30,12 +30,12 @@ func (a *app) runCheck(args []string) int {
 		return a.requestError(err)
 	}
 	if status != http.StatusOK {
-		a.printError("worker_health_failed", fmt.Sprintf("worker /healthz 返回 HTTP %d", status))
+		a.printError("worker_health_failed", fmt.Sprintf("Worker 健康检查失败（HTTP %d）", status))
 		return 1
 	}
 	var health healthResponse
 	if err := api.DecodeJSON(raw, &health); err != nil {
-		return a.internalError("worker_health_invalid", fmt.Errorf("解析 /healthz 失败: %w", err))
+		return a.internalError("worker_health_invalid", fmt.Errorf("无法解析 Worker 健康检查结果：%w", err))
 	}
 	apiVersion := "unknown"
 	compatible := false
@@ -59,11 +59,11 @@ func (a *app) runCheck(args []string) int {
 		)
 	}
 	if health.APIVersion == nil {
-		a.printError("api_version_missing", "worker 未上报 api_version，不支持 /tasks；请升级 worker")
+		a.printError("api_version_missing", "Worker 未提供任务接口版本信息。请升级 Worker")
 		return 1
 	}
 	if *health.APIVersion < requiredAPIVersion {
-		a.printError("api_version_too_old", "worker API 版本过低，请升级 worker 或降级客户端")
+		a.printError("api_version_too_old", "Worker 版本与当前客户端不兼容。请升级 Worker 或使用匹配的客户端版本")
 		return 1
 	}
 	return 0

@@ -92,7 +92,7 @@ def _binary(path: str, label: str, wrapper: Path | None = None) -> str:
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise RuntimeError(f"{label} 不存在或不可执行: {resolved}")
     if wrapper is not None and resolved == wrapper.resolve():
-        raise RuntimeError(f"真实 runc 指向 Neu Box wrapper，配置后会递归调用: {resolved}")
+        raise RuntimeError(f"runc 的实际路径不能指向 Neu Box 运行时自身：{resolved}")
     return str(resolved)
 
 
