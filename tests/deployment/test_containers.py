@@ -352,13 +352,14 @@ def test_docker_task_opens_only_its_reserved_devices(container, container_image)
         #    ContainerConfig 走 split_command），所以多语句必须写成
         #    `sh -c '...'`；直接写脚本会被拆成 `["out=$(", "(", …]` 去 exec，
         #    runtime 报 `exec: "out=$(": executable file not found`。
-        # 2) 探测要在**子 shell** 里 open、只看退出码：非交互 sh 遇到重定向失败
+        # 2) 探测要在**子 shell** 里 open：非交互 sh 遇到重定向失败
         #    会退出整个脚本（`if : <node` 也救不了），那样"被拒绝"就表现成任务
-        #    失败，而不是一个可断言的结论。只看退出码、不认消息文本 —— 镜像里的
-        #    libc 消息目录不一定完整（与 container_probe_command 同一套判据）。
-        probes = "; ".join(
+        #    失败。sh 的退出码不是 errno：这个镜像在 Permission denied 时返回 2，
+        #    因此同时记录错误消息，不能把退出码 2 当成驱动错误。
+        probes = "export LC_ALL=C; " + "; ".join(
             f"out=$( ( exec 3<{nodes[minor]} ) 2>&1 ); rc=$?; "
-            f"echo SBX_PROBE_{minor}=$rc"
+            f"printf \"SBX_PROBE_{minor}=%s\\n\" \"$rc\"; "
+            f"printf \"SBX_PROBE_MSG_{minor}=%s\\n\" \"$out\""
             for minor in (first, bystander)
         )
         task_id = container.submit(
@@ -380,11 +381,25 @@ def test_docker_task_opens_only_its_reserved_devices(container, container_image)
             f"容器里打不开自己申请的卡 {first}（{nodes[first]}）—— 登记在、"
             f"BPF 授权没生效:\n{text[:2000]}"
         )
-        assert f"SBX_PROBE_{bystander}=1" in text, (
-            f"别的沙盒预留的卡 {bystander}（{nodes[bystander]}）在容器里的探测结果"
-            f"不是被拒绝（退出码 1 = 权限类错误）：退出码 0 说明容器越权打开了"
-            f"这张卡（设备隔离没覆盖 docker 任务），124 是超时，2 是非权限类错误"
-            f"（例如驱动没初始化，无从判断）:\n{text[:2000]}"
+        rc_prefix = f"SBX_PROBE_{bystander}="
+        msg_prefix = f"SBX_PROBE_MSG_{bystander}="
+        bystander_rc = next(
+            (line[len(rc_prefix):] for line in text.splitlines()
+             if line.startswith(rc_prefix)), None,
+        )
+        bystander_msg = next(
+            (line[len(msg_prefix):] for line in text.splitlines()
+             if line.startswith(msg_prefix)), "",
+        )
+        assert bystander_rc is not None and bystander_rc != "0" and any(
+            reason in bystander_msg for reason in (
+                "Permission denied", "Operation not permitted",
+                "权限不够", "不允许的操作",
+            )
+        ), (
+            f"别的沙盒预留的卡 {bystander}（{nodes[bystander]}）未得到明确的"
+            f"权限拒绝结果（shell 退出码 {bystander_rc!r}，消息 {bystander_msg!r}）。"
+            f"退出码 0 表示越权打开，其他错误需要单独排查：\n{text[:2000]}"
         )
 
     container.wait_idle_at_least(baseline)

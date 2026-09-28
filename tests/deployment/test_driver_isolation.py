@@ -590,8 +590,8 @@ def driver_probe_image(driver_isolation, single_card):
         pytest.fail(
             "前置缺失：驱动侧隔离测试需要设置 NEU_BOX_DRIVER_PROBE_IMAGE，"
             "指向本地含 Python、torch_npu 和匹配 CANN 用户态的镜像。"
-            "NEU_BOX_CONTAINER_IMAGE=alpine:3.20 只适合普通 Docker 测试；"
-            "Alpine 里的 open 与 npu-smi 不会建立 /proc/uda/namespace_node。",
+            "普通容器镜像无法代替驱动探针镜像；仅打开设备节点或运行 "
+            "npu-smi 不会建立 /proc/uda/namespace_node。",
             pytrace=False,
         )
     if image not in single_card.local_images():
