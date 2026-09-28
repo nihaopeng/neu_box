@@ -9,15 +9,13 @@ sudoedit /etc/neu-box/worker.env          # RPM 已装默认配置，按节点�
 sudo /usr/libexec/neu-box/bin/neuboxctl setup                     # 配置 runtime 与 Docker、迁移数据库、启动 Worker
 docker info --format '{{.DefaultRuntime}}'  # 应为 neu-box-runtime
 curl -fsS http://127.0.0.1:59075/healthz
-sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/bin/neuboxctl test
+sudo /usr/libexec/neu-box/bin/neuboxctl test
 
 # 升级：先 pause，再装同一个包、迁移配置、setup、验收
 sudo /usr/libexec/neu-box/bin/neuboxctl pause
 sudo dnf install ./neuboxd-<version>-<release>.<arch>.rpm
 sudo /usr/libexec/neu-box/bin/neuboxctl setup
-sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/bin/neuboxctl test
+sudo /usr/libexec/neu-box/bin/neuboxctl test
 ```
 
 从 `0.5.0-15` 升级到首次采用新入口的版本时，安装前仍需使用已安装版本的
@@ -61,20 +59,17 @@ Docker 重启可能停止当前运行的容器，请先检查 `docker ps`。
 
 `neuboxctl test` 会访问真实 API、运行任务、占用设备、
 启动容器，最后的维护用例还会停/起 Worker。必须在维护窗口以 root 执行。
-套件不自动拉取镜像；缺少必需镜像或设备时会失败，不会跳过。
+套件不自动拉取镜像。没有 Docker 或本机没有镜像时跳过容器用例；
+Worker、设备等核心前置条件缺失时仍报告失败。
 
-普通容器用例使用 `NEU_BOX_CONTAINER_IMAGE` 指定本机已有、带 `/bin/sh` 的镜像，
-例如 `alpine:3.20`。Ascend UDA 隔离用例另需
-`NEU_BOX_DRIVER_PROBE_IMAGE`：镜像必须已在本机，并包含 Python、`torch_npu` 和
-与宿主驱动兼容的 CANN 用户态。Alpine 不能充当驱动探针镜像。
+普通容器用例默认使用本机已有镜像；需要指定时，用 `NEU_BOX_CONTAINER_IMAGE`
+选择带 `/bin/sh` 的镜像。
 
 ```bash
-docker image inspect alpine:3.20 your-ascend-image:tag
-sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/bin/neuboxctl test
+sudo /usr/libexec/neu-box/bin/neuboxctl test
 ```
 
-将镜像名换成该节点实际安装的名称。套件还覆盖 CLI 的
+如需指定普通容器镜像，可在命令前设置 `NEU_BOX_CONTAINER_IMAGE`。套件还覆盖 CLI 的
 `neubox submit --script` 文件快照、stdin 脚本退出码，以及脚本中执行
 `neubox docker run --rm` 后的容器和设备清理。
 

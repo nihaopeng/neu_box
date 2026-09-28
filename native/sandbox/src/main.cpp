@@ -252,7 +252,7 @@ auto dispatch(const std::vector<std::string_view>& arguments,
             throw std::invalid_argument("load 需要 --device-major");
         }
         ensure_bpf_ready(object_path, *device_major);
-        std::cout << "✓ BPF 程序已加载并挂载\n";
+        std::cout << "BPF 程序已加载并挂载\n";
         return 0;
     }
 
@@ -303,7 +303,7 @@ auto dispatch(const std::vector<std::string_view>& arguments,
             std::rethrow_exception(create_error);
         }
 
-        std::cout << "✓ sandbox '" << name << "' 已创建\n";
+        std::cout << "sandbox '" << name << "' 已创建\n";
         return 0;
     }
 
@@ -317,7 +317,7 @@ auto dispatch(const std::vector<std::string_view>& arguments,
         }
         require_bpf_ready();
         join_cgroup(arguments[1], static_cast<pid_t>(parsed_pid));
-        std::cout << "✓ PID " << parsed_pid << " 已加入 sandbox '" << arguments[1] << "'\n";
+        std::cout << "PID " << parsed_pid << " 已加入 sandbox '" << arguments[1] << "'\n";
         return 0;
     }
 
@@ -345,7 +345,7 @@ auto dispatch(const std::vector<std::string_view>& arguments,
 
         const std::uint64_t owner = cgroup_id(arguments[1]);
         register_container_owner(mount_namespace, owner);
-        std::cout << "✓ 容器 mnt ns " << mount_namespace << " 已登记到 sandbox '" << arguments[1]
+        std::cout << "容器 mnt ns " << mount_namespace << " 已登记到 sandbox '" << arguments[1]
                   << "'\n";
         return 0;
     }
@@ -362,7 +362,7 @@ auto dispatch(const std::vector<std::string_view>& arguments,
         // 登记时记下的 inum 删除。
         require_bpf_ready();
         unregister_container_owner(mount_namespace);
-        std::cout << "✓ mnt ns " << mount_namespace << " 的容器登记已删除\n";
+        std::cout << "mnt ns " << mount_namespace << " 的容器登记已删除\n";
         return 0;
     }
 
@@ -371,7 +371,7 @@ auto dispatch(const std::vector<std::string_view>& arguments,
             throw std::invalid_argument("用法: destroy <name>");
         }
         destroy_one(arguments[1]);
-        std::cout << "✓ sandbox '" << arguments[1] << "' 已销毁\n";
+        std::cout << "sandbox '" << arguments[1] << "' 已销毁\n";
         return 0;
     }
 
@@ -406,7 +406,7 @@ auto dispatch(const std::vector<std::string_view>& arguments,
 
         unload_bpf();
         remove_all_state();
-        std::cout << "✓ cleanup 完成\n";
+        std::cout << "cleanup 完成\n";
         return 0;
     }
 

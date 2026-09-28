@@ -125,5 +125,5 @@ def test_release_stops_registered_container(
         assert process_alive(terminal.pid), (
             f"release 误杀了借出去的终端 {terminal.pid}"
         )
-        single_card.wait_idle_at_least(baseline)
-        assert device in single_card.idle_minors(), single_card.idle_minors()
+        # 旧沙盒和登记都已消失。释放后的卡可能立刻由其他用户重新借走，
+        # 因而不能用全局 idle 快照断言这张卡仍空闲。

@@ -226,7 +226,7 @@ bind mount 里的输出文件会保留。
 
 `neubox check` 查询 worker `/healthz`：
 
-- `api_version >= 2` → 兼容 ✓
+- `api_version >= 2` → 兼容
 - 有 `api_version` 但 < 2 → 退出码 1（不兼容）
 - 无 `api_version` 字段（旧版 worker）→ 退出码 1（不支持 `/tasks`）
 

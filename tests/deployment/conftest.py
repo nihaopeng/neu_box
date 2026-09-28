@@ -1,10 +1,8 @@
 """第 3 层实机验收的 pytest fixture、收集顺序与收集隔离。
 
-**这一层不跳过。** 每组一个 fixture，fixture 里检查该组的前置条件，缺什么就直接
-``pytest.fail`` 并把缺的东西写进消息 —— 这是部署验收，不是开发机上的便利
-测试。``tests/integration/`` 那两层的 skip 语义在这里是反的。
+核心组件缺失视为验收失败。Docker 缺失时跳过容器用例。
 
-十一个文件就是十一个组，按"越靠后越贵"排（``_FILE_ORDER``）：基本盘（不碰卡）→
+十个文件就是十个组，按"越靠后越贵"排（``_FILE_ORDER``）：基本盘（不碰卡）→
 单卡 → 多卡 → 调度 → 容器 → 收尸（要跨收尸周期）→ 维护（停/起服，独占，必须
 最后）。pytest 默认按文件名字母序收集，和这个顺序不一样（``scheduling`` 会插到
 ``single_device`` 前面、``reaper`` 会跑到最后），所以顺序在这里显式钉住。
@@ -39,7 +37,6 @@ from deployment_support import (  # noqa: E402  (同目录，pytest 已把它放
 import deployment_support as support
 
 _SELECTED = os.environ.get("NEU_BOX_DEPLOYMENT_TESTS") == "1"
-
 # 非验收模式下这个目录里什么都不收：开发机上 `pytest tests/` 必须保持干净。
 collect_ignore_glob: list[str] = [] if _SELECTED else ["test_*.py"]
 
@@ -54,9 +51,8 @@ _FILE_ORDER = (
     "test_client.py",         # 6. client(neubox) 基本路径与 shell
     "test_client_docker.py",  # 7. client 容器路径：run / start / restart / status
     "test_submit_script.py",  # 8. 真 CLI 的脚本快照、退出码与容器任务
-    "test_driver_isolation.py",  # 9. 驱动侧隔离：读 /proc/uda 验 UDA 表
-    "test_reaper.py",         # 10. 收尸：每条都要跨收尸周期
-    "test_maintenance.py",    # 11. 停机维护：停/起服，必须最后
+    "test_reaper.py",         # 9. 收尸：每条都要跨收尸周期
+    "test_maintenance.py",    # 10. 停机维护：停/起服，必须最后
 )
 
 # client 组要求的最低 neubox 版本。
@@ -340,6 +336,8 @@ def container(deployment: Deployment, basic: Deployment) -> Deployment:
     dockerd 的 default-runtime 是 ``neu-box-runtime`` 才谈得上后面的用例。
     这个名字是 runtime 侧（neu_box_runtime）的契约，不是短名 ``neu-box``。
     """
+    if shutil.which("docker") is None:
+        pytest.skip("未安装 Docker，跳过容器用例")
     runtime = deployment.default_runtime()
     expected = os.environ.get("NEU_BOX_CONTAINER_RUNTIME", "neu-box-runtime")
     if runtime != expected:

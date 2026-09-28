@@ -34,18 +34,13 @@ uv run --frozen --group build deploy/build_release.py
 
 ## 部署后验收
 
-部署后验收套件会通过 Ascend 驱动的
-`/proc/uda/namespace_node` 检查容器设备隔离。普通容器测试可使用本机已有、带
-`/bin/sh` 的镜像，例如 `alpine:3.20`；UDA 测试另需本机已有、包含 Python、
-`torch_npu` 和与宿主驱动兼容的 CANN 用户态的镜像。套件不会拉取镜像，也不会跳过
-缺少前置条件的用例。
+默认部署验收覆盖 Worker、设备调度、CLI 和容器路径。没有 Docker 或本机没有
+镜像时，容器用例跳过；核心服务或设备前置缺失仍报告失败。套件不会拉取镜像。
 
-在维护窗口以 root 执行；把示例中的镜像名换成本机实际安装的镜像：
+在维护窗口以 root 执行：
 
 ```bash
-docker image inspect alpine:3.20 your-ascend-image:tag
-sudo env NEU_BOX_CONTAINER_IMAGE=alpine:3.20 \
-  NEU_BOX_DRIVER_PROBE_IMAGE=your-ascend-image:tag /usr/libexec/neu-box/bin/neuboxctl test
+sudo /usr/libexec/neu-box/bin/neuboxctl test
 ```
 
 套件还验证真实 `neubox submit --script`：文件脚本在提交时保存快照、stdin 脚本

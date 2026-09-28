@@ -32,14 +32,14 @@
 //
 // 注入到哪个 phase 由 NEU_BOX_HOOK_PHASE 决定，默认 createRuntime。
 //
-//	✅ createRuntime  直连 runc 验证过（`runc run -b`，不经过 dockerd）：hook 被
+//	createRuntime  直连 runc 验证过（`runc run -b`，不经过 dockerd）：hook 被
 //	                  调用、读得到容器 mnt ns（mnt:[4026549739] ≠ hook 自己的
 //	                  mnt:[4026531841]）和容器 cgroup scope 及其 inode，hook 退
 //	                  非 0 时 payload 不执行。phase 是 runc 自己的行为，
 //	                  Docker/containerd 只负责挑 runtime 二进制，这一层验过就够。
 //	                  选它当默认还因为 prestart 在 OCI 规范里已废弃，迟早会被
 //	                  runc 摘掉。
-//	✅ prestart       整条 Docker 链路（Docker 28.5.2 → containerd 1.7.28 →
+//	prestart       整条 Docker 链路（Docker 28.5.2 → containerd 1.7.28 →
 //	                  runc 1.3.3）端到端验证过：hook 里能读到容器 host PID /
 //	                  容器 mnt ns / /system.slice/docker-<id>.scope 及其 inode；
 //	                  hook 退非 0 时容器创建失败、payload 不执行。

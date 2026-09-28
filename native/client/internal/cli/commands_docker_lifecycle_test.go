@@ -73,7 +73,7 @@ func TestDockerStatusDoesNotConfuseUnavailableWorkerWithNoCards(t *testing.T) {
 	}
 }
 
-func TestDockerRestartStopsBeforeLendingAndStartsAfterUnregister(t *testing.T) {
+func TestDockerRestartStopsBeforeLendingWhileOldStatusIsStale(t *testing.T) {
 	stopped := false
 	var calls []string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -86,11 +86,9 @@ func TestDockerRestartStopsBeforeLendingAndStartsAfterUnregister(t *testing.T) {
 			if request.URL.Query().Get("container") != testContainerID {
 				t.Errorf("query=%s", request.URL.String())
 			}
-			if stopped {
-				writeJSON(t, writer, http.StatusOK, map[string]any{"sandbox_name": nil, "sandbox": nil})
-			} else {
-				writeJSON(t, writer, http.StatusOK, map[string]any{"sandbox_name": "sbx_yuxd_old.slice"})
-			}
+			// The intent endpoint retires a dead registration atomically. This
+			// read-only endpoint may still report the old row after Docker stop.
+			writeJSON(t, writer, http.StatusOK, map[string]any{"sandbox_name": "sbx_yuxd_old.slice"})
 		case "/container/intent":
 			if request.Method == http.MethodPost {
 				if !stopped {

@@ -636,6 +636,53 @@ def test_acknowledged_short_run_allows_next_lend_after_unregistration(
     assert intents.peek(CONTAINER_ID, 'user')['borrower_pid'] == 4343
 
 
+def test_lend_retires_dead_registration_before_issuing_intent(
+        runtime_http, monkeypatch, intents):
+    record = {
+        'container_id': CONTAINER_ID,
+        'mount_namespace': 42,
+        'init_host_pid': 123,
+        'init_start_time': 1,
+    }
+    manager = _manager(sandboxes=_active_sandbox(), containers={42: record})
+    manager._container_fds[42] = (0, 0)  # pidfd exists; dead result is definitive.
+    _install(monkeypatch, manager)
+    _patch_caller(monkeypatch)
+
+    response = _lend_request(runtime_http)
+
+    assert response.status_code == 200
+    assert manager.unbound == [42]
+    assert manager.db.get_container(42) is None
+    assert intents.peek(CONTAINER_ID, 'user')['sandbox_name'] == SANDBOX
+
+
+def test_lend_refuses_intent_if_old_authorization_cannot_be_revoked(
+        runtime_http, monkeypatch, intents):
+    record = {
+        'container_id': CONTAINER_ID,
+        'mount_namespace': 42,
+        'init_host_pid': 123,
+        'init_start_time': 1,
+    }
+    manager = _manager(sandboxes=_active_sandbox(), containers={42: record})
+    manager._container_fds[42] = (0, 0)
+
+    def failed_unbind(_namespace):
+        raise OSError('BPF map unavailable')
+
+    manager.unbind_container = failed_unbind
+    _install(monkeypatch, manager)
+    _patch_caller(monkeypatch)
+
+    response = _lend_request(runtime_http)
+
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'container_binding_unknown'
+    assert manager.db.get_container(42) is not None
+    assert intents.peek(CONTAINER_ID, 'user') is None
+
+
 def test_lend_fails_closed_when_old_registration_liveness_is_unknown(
         runtime_http, monkeypatch, intents):
     manager = _manager(sandboxes=_active_sandbox(), containers={

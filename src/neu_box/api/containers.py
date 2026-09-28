@@ -170,6 +170,15 @@ def lend_sandbox_for_start():
                             "error": "容器仍在运行并持有现有沙盒授权；请先停止它",
                             "code": "container_still_bound",
                         }, 409
+                    # Docker stop has returned, but the background reaper may
+                    # not have processed the old pidfd yet. Revoke that dead
+                    # registration before issuing a new start intent.
+                    manager.release_container(
+                        int(record['mount_namespace']),
+                        expected_container_id=container_id,
+                        expected_init_host_pid=int(record['init_host_pid']),
+                        expected_init_start_time=int(record['init_start_time']),
+                    )
             except Exception:
                 logger.exception('无法确认容器 %s 的旧登记是否仍存活', container_id)
                 return {

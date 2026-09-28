@@ -89,7 +89,6 @@ cat <<'EOF'
  配置  /etc/neu-box/worker.env（升级时保留现有配置）
  启用  sudo /usr/libexec/neu-box/bin/neuboxctl setup
  验收  sudo /usr/libexec/neu-box/bin/neuboxctl test
-       Ascend 隔离测试需设置 NEU_BOX_DRIVER_PROBE_IMAGE。
  文档  rpm -qd neuboxd
 ================================================================
 EOF

@@ -2,19 +2,12 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/neusbox/neu_box/native/client/internal/api"
-)
-
-const (
-	dockerStopConfirmTimeout = 10 * time.Second
-	dockerStopConfirmPoll    = 100 * time.Millisecond
 )
 
 type dockerContainerInfo struct {
@@ -149,23 +142,6 @@ func (a *app) runDockerStatus(args []string) int {
 	return 0
 }
 
-func (a *app) waitDockerUnregistered(containerID string) error {
-	deadline := time.Now().Add(dockerStopConfirmTimeout)
-	for {
-		binding, err := a.lookupDockerBinding(containerID)
-		if err != nil {
-			return fmt.Errorf("容器已停止，但无法确认旧授权已撤销: %w", err)
-		}
-		if binding.SandboxName == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return errors.New("容器已停止，但旧授权仍未撤销；请检查 Worker 后再启动")
-		}
-		time.Sleep(dockerStopConfirmPoll)
-	}
-}
-
 func (a *app) runDockerRestart(args []string) int {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 		return a.usageError("用法: " + dockerRestartUsage)
@@ -200,9 +176,6 @@ func (a *app) runDockerRestart(args []string) int {
 	// command keeps its own two-column result (including in --json mode).
 	if _, err := a.outputFn(binary, "stop", container); err != nil {
 		return a.internalError("docker_stop_failed", err)
-	}
-	if err := a.waitDockerUnregistered(info.ID); err != nil {
-		return a.internalError("container_unregistration_failed", err)
 	}
 	sandboxName, err := a.lendSandboxTo(info.ID)
 	if err != nil {

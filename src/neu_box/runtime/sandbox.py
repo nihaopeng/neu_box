@@ -366,7 +366,7 @@ class SbxManager:
             # Keep CREATING until the first join.  The command/container
             # startup can be slow; activation is the join operation's
             # responsibility and the Reaper skips this transitional state.
-            logger.warning("✓ 沙盒 '%s' native 创建成功，等待首次 join", name)
+            logger.info("沙盒 '%s' native 创建成功，等待首次 join", name)
             return True
 
     def join_sandbox(self, name: str, pid: int,
@@ -424,7 +424,7 @@ class SbxManager:
                 logger.error("加入成功但 sandbox '%s' 无法切换为 ACTIVE", name)
                 return False
 
-            logger.warning("✓ PID %s 已加入沙盒 '%s'", pid, name)
+            logger.info("PID %s 已加入沙盒 '%s'", pid, name)
             return True
 
     def destroy_sandbox(self, name: str) -> bool:
@@ -522,7 +522,7 @@ class SbxManager:
             # 这里删掉对应的记录，两边不留下"账在、map 不在"的分叉。
             self.db.delete_containers_of_sandbox(name)
             self.db.delete_sandbox(name)
-            logger.warning("✓ 沙盒 '%s' 已销毁", name)
+            logger.info("沙盒 '%s' 已销毁", name)
             return True
 
     # ── 容器归属登记 ─────────────────────────────────────────────
@@ -1305,8 +1305,8 @@ class SbxManager:
             if not origin:
                 continue
             if self.move_pid_to_cgroup(int(pid), origin):
-                logger.warning(
-                    "✓ PID %s 已从沙盒 '%s' 迁回 %s",
+                logger.info(
+                    "PID %s 已从沙盒 '%s' 迁回 %s",
                     pid, sandbox_name, origin,
                 )
 
@@ -1375,8 +1375,8 @@ class SbxManager:
                 pid, sandbox_name, destination,
             )
             return False
-        logger.warning(
-            "✓ 调用方 PID %s 已从沙盒 '%s' 搬回 %s（它自己发起的 release）",
+        logger.info(
+            "调用方 PID %s 已从沙盒 '%s' 搬回 %s（它自己发起的 release）",
             pid, sandbox_name, destination,
         )
         return True

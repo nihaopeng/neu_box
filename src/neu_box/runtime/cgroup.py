@@ -166,5 +166,5 @@ def move_pid(pid: int, cgroup_path: str) -> bool:
         )
         return False
 
-    logger.warning('✓ PID %s 已迁移到 cgroup %s', pid, normalized)
+    logger.info('PID %s 已迁移到 cgroup %s', pid, normalized)
     return True
