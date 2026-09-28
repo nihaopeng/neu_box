@@ -192,7 +192,13 @@ func (a *app) runList(args []string) int {
 		if task.QueuePosition != nil {
 			item = append(item, outputField{"position", formatQueuePosition(task.QueuePosition)})
 		}
-		item = append(item, taskResourceFields(task)...)
+		if entryKind(task) == "acquire" {
+			if devices := taskDeviceText(task); devices != "" {
+				item = append(item, outputField{"devices", devices})
+			}
+		} else {
+			item = append(item, taskResourceFields(task)...)
+		}
 		printFields(a.out, item...)
 	}
 	return 0
@@ -278,6 +284,7 @@ type taskResultResponse struct {
 	CPU           int            `json:"cpu"`
 	Mem           string         `json:"mem"`
 	DeviceNum     int            `json:"device_num"`
+	DeviceIDs     []string       `json:"device_ids"`
 	Devices       []string       `json:"devices"`
 	CreatedAt     *float64       `json:"created_at"`
 	FinishedAt    *float64       `json:"finished_at"`
@@ -360,13 +367,26 @@ func (a *app) runResult(args []string) int {
 	return 0
 }
 
+func taskDeviceText(task taskResultResponse) string {
+	if len(task.Devices) > 0 {
+		return formatDevices(task.Devices)
+	}
+	if len(task.DeviceIDs) > 0 {
+		return "requested " + formatDevices(task.DeviceIDs)
+	}
+	if task.DeviceNum > 0 {
+		return fmt.Sprintf("requested %d", task.DeviceNum)
+	}
+	return ""
+}
+
 func taskResourceFields(task taskResultResponse) []outputField {
-	if task.CPU == 0 && (task.Mem == "" || task.Mem == "0") && task.DeviceNum == 0 && len(task.Devices) == 0 {
+	devices := taskDeviceText(task)
+	if task.CPU == 0 && (task.Mem == "" || task.Mem == "0") && devices == "" {
 		return nil
 	}
-	devices := formatDevices(task.Devices)
-	if len(task.Devices) == 0 && task.DeviceNum > 0 {
-		devices = fmt.Sprintf("requested %d", task.DeviceNum)
+	if devices == "" {
+		devices = "none"
 	}
 	return []outputField{
 		{"devices", devices},

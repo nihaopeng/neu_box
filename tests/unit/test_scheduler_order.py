@@ -8,7 +8,7 @@ import asyncio
 import threading
 
 from neu_box.runtime.sandbox import SbxManager
-from neu_box.scheduling import resources
+from neu_box.scheduling import resources, tasks as task_shape
 from neu_box.scheduling.queue import TaskQueue
 from neu_box.scheduling.sessions import AcquireRequest
 
@@ -188,6 +188,15 @@ def test_queue_position_is_priority_then_rank_across_tasks_and_acquires():
     assert queue.priority_rank('missing') is None
     assert queue._dequeue('task', 'low-a') is True
     assert queue.priority_rank('low-b') == {'priority': 0, 'rank': 1}
+
+
+def test_queued_task_exposes_requested_device_ids():
+    task = _task('fixed', device_ids=['234:0', '234:3'])
+    task.update(user_id='alice', command='true', status='queued', cpu=0, mem='0')
+
+    public = task_shape.public(task)
+    assert public['device_ids'] == ['234:0', '234:3']
+    assert public['devices'] == []
 
 
 def test_consume_loop_lets_spawned_coroutines_run():

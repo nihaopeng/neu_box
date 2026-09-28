@@ -125,6 +125,56 @@ func TestListDefaultShowsActiveRequestsOnly(t *testing.T) {
 	}
 }
 
+func TestListShowsRequestedDevicesForQueuedTasksAndAcquires(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/tasks":
+			writeJSON(t, writer, http.StatusOK, map[string]any{
+				"total_pending": 3,
+				"queue": []map[string]any{
+					{"kind": "task", "id": "fixed-task", "status": "queued", "device_ids": []string{"234:0", "234:3"}},
+					{"kind": "acquire", "id": "fixed-acquire", "status": "queued", "device_ids": []string{"234:0"}},
+					{"kind": "task", "id": "auto-task", "status": "queued", "device_num": 8},
+					{"kind": "acquire", "id": "active-acquire", "status": "active", "device_ids": []string{"234:2"}, "devices": []string{"234:2"}},
+				},
+			})
+		case "/sandbox/list":
+			writeJSON(t, writer, http.StatusOK, map[string]any{"sandboxes": []any{}})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	application, out, errOut := testApplication(server.URL)
+	if code := application.run([]string{"list"}); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	for _, check := range []struct{ id, devices string }{
+		{"fixed-task", "requested 234:0, 234:3"},
+		{"fixed-acquire", "requested 234:0"},
+		{"auto-task", "requested 8"},
+		{"active-acquire", "234:2"},
+	} {
+		found := false
+		for _, block := range strings.Split(out.String(), "\n\n") {
+			if !strings.Contains(block, check.id) {
+				continue
+			}
+			found = true
+			if !strings.Contains(block, check.devices) {
+				t.Fatalf("%s 缺少设备 %q:\n%s", check.id, check.devices, block)
+			}
+			if check.id == "active-acquire" && strings.Contains(block, "requested") {
+				t.Fatalf("运行中的 acquire 应显示已分配设备:\n%s", block)
+			}
+		}
+		if !found {
+			t.Fatalf("未找到 %s:\n%s", check.id, out.String())
+		}
+	}
+}
+
 func TestTasksIsListAlias(t *testing.T) {
 	server := tasksQueueServer(t)
 	application, out, _ := testApplication(server.URL)

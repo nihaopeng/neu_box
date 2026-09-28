@@ -45,6 +45,7 @@ def public(task: dict) -> dict:
         'cpu': task.get('cpu', 0), 'est_time': task.get('est_time', 0) or 0,
         'eta': task.get('eta'), 'mem': task.get('mem', '0'),
         'device_num': task.get('device_num', len(task.get('devices') or [])),
+        'device_ids': task.get('device_ids') or [],
         'devices': task.get('devices', []),
         'target': public_execution_target(target),
         'created_at': task.get('created_at'),
